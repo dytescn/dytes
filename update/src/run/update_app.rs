@@ -1,8 +1,6 @@
-use std::fs;
 use std::collections::HashMap;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use serde_json::Value; 
 use crate::utils::version::check_version;
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -52,7 +50,6 @@ pub async fn update_app_info(name:String,version:String) -> Result<()> {
     }
     // 执行更新逻辑
     println!("开始准备更新...");
-        
     // 构建 dytes.json 的 URL
     let detail_url = format!("https://packages.funxdata.com/app/{}/dytes.json", name);
     let detail_response = reqwest::get(&detail_url).await?;
@@ -62,6 +59,7 @@ pub async fn update_app_info(name:String,version:String) -> Result<()> {
     }
     let remote_app_info_text = detail_response.text().await?;
     let remote_app_info: PackageDetail = serde_json::from_str(&remote_app_info_text)?;
+    println!("{:?}",remote_app_info);
     // 整理exports数据
     // 将整理好的exports数据写入dytes.lock
     Ok(())

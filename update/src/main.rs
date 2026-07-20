@@ -2,63 +2,58 @@ pub mod utils;
 pub mod run;
 use crate::run::dytes;
 use slint::ComponentHandle;
-use std::time::Duration;
-use tokio::time::sleep;
 slint::include_modules!();
+type ProgressCallback = Box<dyn Fn(f32, &str) + Send + Sync>;
 
 #[tokio::main]
 async fn main() -> Result<(), slint::PlatformError> {
-    println!("正在检查网络环境...");
+    println!("启动更新程序...");
     if !utils::env::check_network().await {
+        println!("网络不可用，退出程序");
         std::process::exit(1);
     }
-    // 检查是否需要更新
-    let _ = dytes::init_dytes().await;
-    // 启动UI更新
-    //
-    // 下载更新
-    //
-    // 初始化相关数据
-    //
-    // 更新完成
     let ui = UpdatePage::new()?;
     let ui_handle = ui.as_weak();
     
-    // 注意：回调名称使用下划线，自动转换为 set_on_update_clicked
     ui.on_update_clicked(move || {
         let ui = ui_handle.unwrap();
-        let ui_clone = ui.as_weak();
-        
-        // 属性设置也使用下划线
+        let ui_weak = ui.as_weak();
         ui.set_show_progress(true);
-        ui.set_status_text("更新中...".into());
+        ui.set_status_text("开始检查更新...".into());
         ui.set_progress_value(0.0);
+        let ui_callback = ui_weak.clone();
+        let ui_final = ui_weak.clone();
         
         tokio::spawn(async move {
-            for progress in (0..=100).step_by(5) {
-                sleep(Duration::from_millis(150)).await;
-                
-                if let Some(ui) = ui_clone.upgrade() {
-                    ui.set_progress_value(progress as f32);
-                    
-                    if progress < 30 {
-                        ui.set_status_text("下载更新包...".into());
-                    } else if progress < 60 {
-                        ui.set_status_text("安装更新...".into());
-                    } else if progress < 90 {
-                        ui.set_status_text("配置更新...".into());
-                    } else {
-                        ui.set_status_text("即将完成...".into());
+            let progress_callback: ProgressCallback = Box::new(move |progress: f32, status: &str| {
+                let status_str = status.to_string();
+                let ui = ui_callback.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = ui.upgrade() {
+                        ui.set_progress_value(progress);
+                        ui.set_status_text(status_str.into());
                     }
+                }); 
+                println!("进度: {:.1}% - {}", progress, status);
+            });
+            let result = dytes::init_dytes_with_progress(Some(progress_callback)).await;
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = ui_final.upgrade() {
+                    match result {
+                        Ok(_) => {
+                            ui.set_status_text("更新完成!".into());
+                            ui.set_show_restart(true);
+                            // 移除 set_show_update_button 调用
+                        }
+                        Err(e) => {
+                            ui.set_status_text(format!("更新失败: {}", e).into());
+                            // 移除 set_show_update_button 调用
+                        }
+                    }
+                    ui.set_show_progress(false);
+                    ui.set_progress_value(100.0);
                 }
-            }
-            
-            if let Some(ui) = ui_clone.upgrade() {
-                ui.set_status_text("更新完成!".into());
-                ui.set_show_progress(false);
-                ui.set_show_restart(true);
-                ui.set_progress_value(100.0);
-            }
+            });
         });
     });
     

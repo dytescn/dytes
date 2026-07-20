@@ -1,0 +1,56 @@
+import { Button } from "std-widgets.slint";
+
+import { WelcomePage } from "./pages/welcome.slint";
+import { InstallPage } from "./pages/install.slint";
+import { InstallingPage } from "./pages/installing.slint";
+import { FinishPage } from "./pages/finish.slint";
+
+export component MainWindow inherits Window {
+    width: 600px;
+    height: 400px;
+    title: "Piksel 安装向导";
+
+    in-out property<int> page_idx: 0;
+    in-out property<string> install_path: "/opt/piksel";
+    callback start_install();
+    callback open_browse_dialog();
+
+     // 下载进度透传
+    in-out property<float> total_progress: 0.0;
+    in-out property<float> file_progress: 0.0;
+    in-out property<string> download_status: "";
+
+
+    WelcomePage {
+        visible: root.page_idx == 0;
+        next => { root.page_idx = 1; }
+    }
+
+    InstallPage {
+        visible: root.page_idx == 1;
+        install_path <=> root.install_path;
+
+        back => { root.page_idx = 0; }
+        next => {
+            root.page_idx = 2;
+            root.start_install();
+        }
+        browse => { root.open_browse_dialog(); }
+    }
+
+     InstallingPage {
+        visible: root.page_idx == 2;
+        prev => { root.page_idx = 1; }
+        install_done => { root.page_idx = 3; }
+
+        total_progress <=> root.total_progress;
+        file_progress <=> root.file_progress;
+        status_text <=> root.download_status;
+    }
+
+    FinishPage {
+        visible: root.page_idx == 3;
+        restart => { root.page_idx = 0; }
+    }
+}
+

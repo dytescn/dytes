@@ -1,0 +1,9 @@
+{
+  "name": "piksel_update",
+  "version": "1.0.0",
+  "description": "update for piksel",
+  "keywords": ["update", "piksel", "funxdata"],
+  "license": "MIT",
+  "author": "funxdata",
+  "type": "core"
+}

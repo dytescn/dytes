@@ -1,0 +1,13 @@
+import { Button } from "std-widgets.slint";
+
+export component FinishPage inherits Rectangle {
+    callback restart();
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 30px;
+        Text { text: "安装完成！"; font-size: 24px; color: green; }
+        Button { text: "重新开始"; clicked => root.restart(); }
+    }
+}
+

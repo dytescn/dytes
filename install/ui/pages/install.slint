@@ -1,0 +1,61 @@
+import {
+    Button,
+    LineEdit
+} from "std-widgets.slint";
+
+export component InstallPage inherits Rectangle {
+    width: 600px;
+    height: 400px;
+
+    in-out property<string> install_path;
+
+    callback browse();
+    callback next();
+    callback back();
+
+    VerticalLayout {
+        spacing: 12px;
+        padding:20px;
+
+        Text {
+            text: "选择安装目录";
+            font-size: 24px;
+        }
+
+        Text {
+            text: "请选择 Piksel 的安装位置";
+        }
+
+        HorizontalLayout {
+            height: 30px;
+            LineEdit {
+                text <=> root.install_path;
+            }
+
+            Button {
+                text: "更换目录";
+                clicked => root.browse();
+            }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: #cccccc;
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            height: 30px;
+            Button {
+                text: "上一步";
+                clicked => root.back();
+            }
+
+            Button {
+                text: "下一步";
+                clicked => root.next();
+            }
+        }
+    }
+}
+

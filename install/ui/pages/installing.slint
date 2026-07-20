@@ -1,0 +1,37 @@
+import { Button, ProgressIndicator } from "std-widgets.slint";
+
+export component InstallingPage inherits Rectangle {
+    callback prev();
+    callback install_done();
+
+    // 总进度 0~1
+    in-out property<float> total_progress: 0.0;
+    // 当前单个文件进度
+    in-out property<float> file_progress: 0.0;
+    // 状态文字：正在下载 xxx.zip
+    in-out property<string> status_text: "准备开始下载...";
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 20px;
+        padding: 20px;
+
+        Text {
+            text: root.status_text;
+            font-size: 16px;
+        }
+
+        Text { text: "单个文件进度"; }
+        ProgressIndicator { progress <=> root.file_progress; }
+
+        Text { text: "整体下载总进度"; }
+        ProgressIndicator { progress <=> root.total_progress; }
+
+        Button {
+            text: "模拟安装完成";
+            clicked => root.install_done();
+            visible: false;
+        }
+    }
+}
+

@@ -1,0 +1,8 @@
+{
+  "name": "install",
+  "version": "1.0.0",
+  "description": "install for piksel",
+  "keywords": ["piksel"],
+  "author": "funxdata",
+  "type": "core"
+}

@@ -23,22 +23,6 @@ fn parse_version(version: &str) -> Option<String> {
     None
 }
 
-/// 获取当前操作系统对应的可执行文件后缀
-fn get_os_executable_suffix() -> &'static str {
-    #[cfg(target_os = "windows")]
-    {
-        "_windows.exe"
-    }
-    #[cfg(target_os = "macos")]
-    {
-        "_macos"
-    }
-    #[cfg(target_os = "linux")]
-    {
-        "_linux"
-    }
-}
-
 /// 判断是否为 HTML 文件
 fn is_html_file(filename: &str) -> bool {
     let ext = Path::new(filename)

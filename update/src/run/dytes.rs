@@ -3,6 +3,7 @@ use anyhow::Result;
 use crate::utils::lock::{read_lock, get_package_version_from_lock};
 use crate::utils::version::check_version;
 use crate::utils::dytes::{DytesConfig, read_dytes_config, print_config_info};
+use super::update_setup::setup_webs_init;
 
 /// 进度回调类型
 pub type ProgressCallback = Box<dyn Fn(f32, &str) + Send + Sync>;
@@ -162,13 +163,22 @@ pub async fn init_dytes_with_progress(progress_callback: Option<ProgressCallback
         }
     }
     
-    // 4. Web 资源更新
+    // 4. Web 资源更新 - 收集需要执行 init 的包
+    let mut web_init_results = Vec::new();
     if !web_deps.is_empty() {
         update_progress(&progress_callback, 85.0, "检查 Web 资源更新...");
         for (name, version) in web_deps {
             if need_update(name, version) {
-                if let Err(e) = update_webs::update_webs_info(name.clone(), version.clone()).await {
-                    println!("  更新 {} 失败: {}", name, e);
+                match update_webs::update_webs_info(name.clone(), version.clone()).await {
+                    Ok(Some(result)) => {
+                        web_init_results.push(result);
+                    }
+                    Ok(None) => {
+                        println!("  {} 无需执行 init 脚本", name);
+                    }
+                    Err(e) => {
+                        println!("  更新 {} 失败: {}", name, e);
+                    }
                 }
             } else {
                 println!("  跳过 {} (已是最新)", name);
@@ -176,6 +186,16 @@ pub async fn init_dytes_with_progress(progress_callback: Option<ProgressCallback
             completed += 1;
             let progress = 85.0 + (completed as f32 / total_deps as f32) * 10.0;
             update_progress(&progress_callback, progress, &format!("更新 Web 资源: {}", name));
+        }
+    }
+    
+    // 5. 所有 Web 资源更新完成后，统一执行 init 脚本
+    if !web_init_results.is_empty() {
+        println!("\n执行 Web 资源初始化脚本...");
+        for result in web_init_results {
+            if let Err(e) = setup_webs_init(&result.web_dir, &result.init_scripts) {
+                eprintln!("  执行 {} 的 init 脚本失败: {}", result.package_name, e);
+            }
         }
     }
     

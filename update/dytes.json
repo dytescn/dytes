@@ -1,20 +1,11 @@
 {
-  "name": "piksel",
+  "name": "update",
   "version": "1.0.0",
-  "description": "piksel for apps management",
-  "keywords": ["apps", "management"],
+  "description": "update for piksel",
+  "keywords": ["piksel"],
   "author": "funxdata",
-  "type": "app",
-  "license": "MIT",
-  "dependencies-core": {
-    "piksel": "1.0.0",
-    "cyctron": "1.0.0"
-  },
-  "dependencies-sys": {
-    "ostfil": "1.0.0",
-    "database": "1.0.0"
-  },
-  "dependencies-web": {
-    "init": "1.0.0"
+  "type": "core",
+  "exports": {
+    "./target/release/update.exe": "update.exe"
   }
 }

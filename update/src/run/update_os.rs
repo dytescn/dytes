@@ -1,6 +1,6 @@
 use anyhow::{Result, Context};
 use std::fs;
-use crate::utils::loader::download_file;
+use crate::utils::loader::{download_file, get_random_param};
 use crate::utils::env::get_app_dir;
 use crate::utils::lock::update_package_in_lock;
 use crate::utils::dytes::DytesConfig;
@@ -8,8 +8,10 @@ use crate::utils::dytes::DytesConfig;
 pub async fn update_os_info(name: String, version: String) -> Result<()> {
     println!("更新操作系统信息: {} v{}", name, version);
     
+    let rand = get_random_param();
+    
     // 1. 获取远程包信息
-    let detail_url = format!("https://packages.funxdata.com/core/{}/dytes.json", name);
+    let detail_url = format!("https://packages.funxdata.com/core/{}/dytes.json?rand={}", name, rand);
     let detail_response = reqwest::get(&detail_url).await
         .with_context(|| format!("请求 {} 失败", detail_url))?;
     
@@ -31,14 +33,15 @@ pub async fn update_os_info(name: String, version: String) -> Result<()> {
     
     // 3. 下载导出的文件
     for (_source_path, dest_filename) in &remote_app_info.exports {
+        let rand = get_random_param();
         // 直接使用 dest_filename 作为下载文件名
         let remote_url = format!(
-            "https://packages.funxdata.com/core/{}/{}/{}",
-            name, remote_app_info.version, dest_filename
+            "https://packages.funxdata.com/core/{}/{}/{}?rand={}",
+            name, remote_app_info.version, dest_filename, rand
         );
         
-        // 下载到 ./{文件名}
-        let dest_path = format!("{}/{}", app_dir, dest_filename);
+        // 下载到 ./{文件名}，确保路径正确
+        let dest_path = format!("{}/{}", app_dir.trim_end_matches('/'), dest_filename);
         
         println!("  下载: {} -> {}", remote_url, dest_path);
         
@@ -65,6 +68,6 @@ pub async fn update_os_info(name: String, version: String) -> Result<()> {
         loader,
     )?;
     
-    println!("  操作系统更新完成: {} v{}", name, remote_app_info.version);
+    println!("  更新完成: {} v{}", name, remote_app_info.version);
     Ok(())
 }

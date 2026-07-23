@@ -4,6 +4,7 @@ use std::io::Write;
 use std::path::Path;
 use tokio::fs as tokio_fs;
 use futures_util::StreamExt;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub async fn download_file(url: &str, output_dir: &str) -> bool {
     println!("  开始下载: {}", url);
@@ -19,8 +20,11 @@ pub async fn download_file(url: &str, output_dir: &str) -> bool {
             }
         };
     
-    // 发送请求
-    let response = match client.get(url).send().await {
+    // 从 URL 中去除查询参数，用于提取文件名和发送请求
+    let clean_url = url.split('?').next().unwrap_or(url);
+    
+    // 发送请求（使用干净 URL，不带查询参数）
+    let response = match client.get(clean_url).send().await {
         Ok(r) => r,
         Err(e) => {
             eprintln!("请求失败: {}", e);
@@ -36,8 +40,8 @@ pub async fn download_file(url: &str, output_dir: &str) -> bool {
     
     let total_size = response.content_length().unwrap_or(0);
     
-    // 从 URL 中提取文件名
-    let filename = Path::new(url)
+    // 从干净 URL 中提取文件名（不含查询参数）
+    let filename = Path::new(clean_url)
         .file_name()
         .unwrap_or_default()
         .to_string_lossy();
@@ -91,4 +95,12 @@ pub async fn download_file(url: &str, output_dir: &str) -> bool {
     
     println!("\n  下载完成: {}", dest_path.display());
     true
+}
+
+pub fn get_random_param() -> String {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    format!("_t={}", timestamp)
 }

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use crate::utils::version::check_version;
-use crate::utils::loader::download_file;
+use crate::utils::loader::{download_file, get_random_param};
 use crate::utils::env::get_app_dir;
 use crate::utils::lock::update_package_in_lock;
 use crate::utils::dytes::DytesConfig;
@@ -93,9 +93,11 @@ fn get_remote_filename(app_name: &str) -> String {
 pub async fn update_app_info(name: String, version: String) -> Result<()> {
     println!("开始检查应用更新: {} v{}", name, version);
     
+    let rand = get_random_param();
+    
     // 1. 获取远程版本列表
-    let url = "https://packages.funxdata.com/app/packages.json";
-    let response = reqwest::get(url).await?;
+    let url = format!("https://packages.funxdata.com/app/packages.json?rand={}", rand);
+    let response = reqwest::get(&url).await?;
     if !response.status().is_success() {
         anyhow::bail!("下载 packages.json 失败: HTTP {}", response.status());
     }
@@ -115,7 +117,8 @@ pub async fn update_app_info(name: String, version: String) -> Result<()> {
     
     // 3. 获取远程包详细信息
     println!("  发现新版本 {} -> {}，开始准备更新...", local_version, remote_version_str);
-    let detail_url = format!("https://packages.funxdata.com/app/{}/dytes.json", name);
+    let rand = get_random_param();
+    let detail_url = format!("https://packages.funxdata.com/app/{}/dytes.json?rand={}", name, rand);
     let detail_response = reqwest::get(&detail_url).await?;
     if !detail_response.status().is_success() {
         eprintln!("获取 {}/dytes.json 失败，跳过", name);
@@ -162,10 +165,11 @@ pub async fn update_app_info(name: String, version: String) -> Result<()> {
             local_filename.clone()
         };
         
-        // 构建远程 URL
+        // 构建远程 URL（添加随机参数）
+        let rand = get_random_param();
         let remote_url = format!(
-            "https://packages.funxdata.com/app/{}/{}/{}",
-            name, remote_app_info.version, remote_filename
+            "https://packages.funxdata.com/app/{}/{}/{}?rand={}",
+            name, remote_app_info.version, remote_filename, rand
         );
         
         // 本地目标路径

@@ -4,5 +4,8 @@
   "description": "install for piksel",
   "keywords": ["piksel"],
   "author": "funxdata",
-  "type": "core"
+  "type": "core",
+  "exports": {
+    "./target/release/install.exe": "install.exe"
+  }
 }

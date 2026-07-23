@@ -1,25 +1,20 @@
 {
   "name": "piksel",
-  "version": "0.1.9",
+  "version": "1.0.0",
   "description": "piksel for apps management",
   "keywords": ["apps", "management"],
   "author": "funxdata",
   "type": "app",
   "license": "MIT",
   "dependencies-core": {
-    "cyctron": "1.0.0",
-    "update": "1.0.0"
+    "piksel": "1.0.0",
+    "cyctron": "1.0.0"
   },
   "dependencies-sys": {
     "ostfil": "1.0.0",
-    "database": "1.0.0",
-    "chatllm": "1.0.0"
+    "database": "1.0.0"
   },
   "dependencies-web": {
-    "chat": "1.0.0"
-  },
-  "exports": [
-      ["./executable","./"],
-      ["./web/index.html","./web/"]
-  ]
+    "init": "1.0.0"
+  }
 }

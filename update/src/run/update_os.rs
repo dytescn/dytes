@@ -1,100 +1,70 @@
-use std::collections::HashMap;
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
-use crate::utils::version::check_version;
+use anyhow::{Result, Context};
+use std::fs;
+use crate::utils::loader::download_file;
+use crate::utils::env::get_app_dir;
+use crate::utils::lock::update_package_in_lock;
+use crate::utils::dytes::DytesConfig;
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct PackagesInfo {
-    pub packages: HashMap<String, String>,
-    pub updated_at: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct PackageDetail {
-    pub exports: Vec<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct RemoteInfo {
-    pub packages: HashMap<String, String>,
-}
-
-/// 更新操作系统
 pub async fn update_os_info(name: String, version: String) -> Result<()> {
-    println!("🖥️ 开始检查操作系统更新: {} v{}", name, version);
+    println!("更新操作系统信息: {} v{}", name, version);
     
-    #[cfg(target_os = "windows")]
-    {
-        println!("  🪟 Windows 系统更新检查...");
-        let url = "https://packages.funxdata.com/os/windows/packages.json";
-        let response = reqwest::get(url).await?;
-        if !response.status().is_success() {
-            anyhow::bail!("下载 packages.json 失败: HTTP {}", response.status());
-        }
-        let remote_json_text = response.text().await?;
-        let remote_json: RemoteInfo = serde_json::from_str(&remote_json_text)?;
-        let remote_version = remote_json.packages.get(&name).unwrap_or(&version);
-        println!("  远程系统版本: {:?}", remote_version);
-        
-        if !check_version(&version, remote_version) {
-            println!("  ✅ 当前已是最新版本");
-            return Ok(());
-        }
-        
-        println!("  🔄 发现新的系统更新，开始准备更新...");
-        // Windows 系统更新逻辑
-        // 可以调用 Windows Update API
-        println!("  ℹ️ Windows 系统更新需要通过 Windows Update 进行");
+    // 1. 获取远程包信息
+    let detail_url = format!("https://packages.funxdata.com/core/{}/dytes.json", name);
+    let detail_response = reqwest::get(&detail_url).await
+        .with_context(|| format!("请求 {} 失败", detail_url))?;
+    
+    if !detail_response.status().is_success() {
+        eprintln!("获取 {}/dytes.json 失败，跳过", name);
+        return Ok(());
     }
     
-    #[cfg(target_os = "macos")]
-    {
-        println!("  🍎 macOS 系统更新检查...");
-        let url = "https://packages.funxdata.com/os/macos/packages.json";
-        let response = reqwest::get(url).await?;
-        if !response.status().is_success() {
-            anyhow::bail!("下载 packages.json 失败: HTTP {}", response.status());
-        }
-        let remote_json_text = response.text().await?;
-        let remote_json: RemoteInfo = serde_json::from_str(&remote_json_text)?;
-        let remote_version = remote_json.packages.get(&name).unwrap_or(&version);
-        println!("  远程系统版本: {:?}", remote_version);
+    let remote_app_info_text = detail_response.text().await?;
+    let remote_app_info: DytesConfig = serde_json::from_str(&remote_app_info_text)
+        .with_context(|| format!("解析 {}/dytes.json 失败", name))?;
+    
+    println!("  远程版本: {}", remote_app_info.version);
+    println!("  导出文件: {:?}", remote_app_info.exports);
+    
+    // 2. 获取应用目录 - 直接放到 ./
+    let app_dir = get_app_dir();
+    fs::create_dir_all(&app_dir)?;
+    
+    // 3. 下载导出的文件
+    for (_source_path, dest_filename) in &remote_app_info.exports {
+        // 直接使用 dest_filename 作为下载文件名
+        let remote_url = format!(
+            "https://packages.funxdata.com/core/{}/{}/{}",
+            name, remote_app_info.version, dest_filename
+        );
         
-        if !check_version(&version, remote_version) {
-            println!("  ✅ 当前已是最新版本");
-            return Ok(());
+        // 下载到 ./{文件名}
+        let dest_path = format!("{}/{}", app_dir, dest_filename);
+        
+        println!("  下载: {} -> {}", remote_url, dest_path);
+        
+        // 下载文件到 app_dir
+        if !download_file(&remote_url, &app_dir).await {
+            eprintln!("  下载 {} 失败", dest_filename);
+            continue;
         }
         
-        println!("  🔄 发现新的系统更新，开始准备更新...");
-        // macOS 系统更新逻辑
-        println!("  ℹ️ macOS 系统更新需要通过 Software Update 进行");
+        println!("  下载完成: {}", dest_filename);
     }
     
-    #[cfg(target_os = "linux")]
-    {
-        println!("  🐧 Linux 系统更新检查...");
-        let url = "https://packages.funxdata.com/os/linux/packages.json";
-        let response = reqwest::get(url).await?;
-        if !response.status().is_success() {
-            anyhow::bail!("下载 packages.json 失败: HTTP {}", response.status());
-        }
-        let remote_json_text = response.text().await?;
-        let remote_json: RemoteInfo = serde_json::from_str(&remote_json_text)?;
-        let remote_version = remote_json.packages.get(&name).unwrap_or(&version);
-        println!("  远程系统版本: {:?}", remote_version);
-        
-        if !check_version(&version, remote_version) {
-            println!("  ✅ 当前已是最新版本");
-            return Ok(());
-        }
-        
-        println!("  🔄 发现新的系统更新，开始准备更新...");
-        // Linux 系统更新逻辑
-        println!("  ℹ️ Linux 系统更新需要通过包管理器进行");
-        println!("     apt: sudo apt update && sudo apt upgrade");
-        println!("     yum: sudo yum update");
-        println!("     pacman: sudo pacman -Syu");
+    // 4. 构建 loader 数据
+    let mut loader = Vec::new();
+    for (source, dest) in &remote_app_info.exports {
+        loader.push(vec![source.clone(), dest.clone()]);
     }
     
+    // 5. 写入锁文件 - 使用 utils::lock
+    update_package_in_lock(
+        &name,
+        &remote_app_info.version,
+        "core",
+        loader,
+    )?;
+    
+    println!("  操作系统更新完成: {} v{}", name, remote_app_info.version);
     Ok(())
 }

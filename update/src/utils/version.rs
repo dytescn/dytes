@@ -1,5 +1,4 @@
 use semver::Version;
-use anyhow::Result;
 
 /// 检查是否需要更新
 pub fn check_version(current: &str, latest: &str) -> bool {

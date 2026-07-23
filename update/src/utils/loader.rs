@@ -1,33 +1,94 @@
-use downloader::{Downloader, Download};
+use reqwest;
+use std::fs::File;
+use std::io::Write;
 use std::path::Path;
+use tokio::fs as tokio_fs;
+use futures_util::StreamExt;
 
 pub async fn download_file(url: &str, output_dir: &str) -> bool {
-    let mut downloader = match Downloader::builder()
-        .download_folder(Path::new(output_dir))
+    println!("  开始下载: {}", url);
+    
+    // 创建 HTTP 客户端
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
         .build() {
-            Ok(d) => d,
+            Ok(c) => c,
             Err(e) => {
-                eprintln!("创建下载器失败: {}", e);
+                eprintln!("创建 HTTP 客户端失败: {}", e);
                 return false;
             }
         };
     
-    let download = Download::new(url);
-    
-    match downloader.download(&[download]) {
-        Ok(results) => {
-            if let Ok(status) = &results[0] {
-                println!("下载成功: {:?}", status.file_name);
-                true
-            } else {
-                eprintln!("下载失败: {}", results[0].as_ref().unwrap_err());
-                false
-            }
-        }
+    // 发送请求
+    let response = match client.get(url).send().await {
+        Ok(r) => r,
         Err(e) => {
-            eprintln!("下载执行失败: {}", e);
-            false
+            eprintln!("请求失败: {}", e);
+            return false;
+        }
+    };
+    
+    // 检查状态码
+    if !response.status().is_success() {
+        eprintln!("HTTP 错误: {}", response.status());
+        return false;
+    }
+    
+    let total_size = response.content_length().unwrap_or(0);
+    
+    // 从 URL 中提取文件名
+    let filename = Path::new(url)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
+    
+    let dest_path = Path::new(output_dir).join(filename.as_ref());
+    
+    // 创建目录
+    if let Some(parent) = dest_path.parent() {
+        if let Err(e) = tokio_fs::create_dir_all(parent).await {
+            eprintln!("创建目录失败: {}", e);
+            return false;
         }
     }
+    
+    // 创建文件
+    let mut file = match File::create(&dest_path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("创建文件失败: {}", e);
+            return false;
+        }
+    };
+    
+    // 下载数据流 - 使用 bytes_stream
+    let mut stream = response.bytes_stream();
+    let mut downloaded: u64 = 0;
+    
+    while let Some(chunk) = stream.next().await {
+        let chunk = match chunk {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("下载数据失败: {}", e);
+                return false;
+            }
+        };
+        
+        if let Err(e) = file.write_all(&chunk) {
+            eprintln!("写入文件失败: {}", e);
+            return false;
+        }
+        
+        downloaded += chunk.len() as u64;
+        
+        // 显示进度
+        if total_size > 0 {
+            let progress = (downloaded as f32 / total_size as f32) * 100.0;
+            print!("\r  下载进度: {:.1}%", progress);
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+        }
+    }
+    
+    println!("\n  下载完成: {}", dest_path.display());
+    true
 }
-

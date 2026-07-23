@@ -5,8 +5,10 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.102"
+dirs = "6.0.0"
 downloader = "0.2.8"
-reqwest = "0.13.4"
+futures-util = "0.3.33"
+reqwest = { version = "0.13.4", features = ["stream"] }
 rquickjs = "0.12.0"
 semver = "1.0.28"
 serde = { version = "1.0.150", features = ["derive"] }

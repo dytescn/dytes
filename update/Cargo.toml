@@ -3,6 +3,10 @@ name = "update"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "update"
+path = "src/lib.rs"
+
 [dependencies]
 anyhow = "1.0.102"
 dirs = "6.0.0"
@@ -20,3 +24,29 @@ toml = "1.1.2"
 
 [build-dependencies]
 slint-build = "1.17.0"
+
+[dev-dependencies]
+tempfile = "3.8"
+walkdir = "2.4"
+
+[profile.release]
+# 优化级别
+opt-level = 3
+
+# 启用链接时优化 (LTO)
+lto = true
+
+# 启用胖 LTO (跨 crate 优化)
+codegen-units = 1
+
+# 启用 panic 时立即中止，减少二进制大小
+panic = "abort"
+
+# 禁用增量编译
+incremental = false
+
+# 禁用调试信息
+debug = false
+
+# 移除符号表，减小体积
+strip = true

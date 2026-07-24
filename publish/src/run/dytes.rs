@@ -55,13 +55,22 @@ fn update_packages_json(
     use reqwest::blocking::Client;
     use std::fs;
     
+    println!("  请求 packages.json: {}", packages_url);
+    
     // 同步下载远程 packages.json
     let mut packages_data: Value = match Client::new().get(packages_url).send() {
         Ok(response) => {
+            let status = response.status();
+            println!("  响应状态: {}", status);
             if response.status().is_success() {
                 match response.text() {
                     Ok(text) => {
+                        println!("  获取到 packages.json 内容长度: {} bytes", text.len());
+                        if text.len() < 1000 {
+                            println!("  内容预览: {}", text);
+                        }
                         serde_json::from_str(&text).unwrap_or_else(|_| {
+                            println!("  解析 JSON 失败，创建新的");
                             serde_json::json!({
                                 "packages": {},
                                 "updated_at": Utc::now().to_rfc3339()
@@ -119,6 +128,7 @@ fn update_packages_json(
     let temp_path = "packages_updated.json";
     let content = serde_json::to_string_pretty(&packages_data)?;
     fs::write(temp_path, content)?;
+    println!("  保存临时文件: {}", temp_path);
     
     // 上传
     let result = upload_file(temp_path, bucket, packages_remote_path);
@@ -132,7 +142,6 @@ fn update_packages_json(
         anyhow::bail!("packages.json 上传失败")
     }
 }
-
 
 /// 发布包
 pub fn publish(json_path: &Path) -> Result<()> {

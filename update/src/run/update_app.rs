@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use crate::utils::version::check_version;
-use crate::utils::loader::{download_file, get_random_param};
+use crate::utils::loader::download_file;
 use crate::utils::env::get_app_dir;
 use crate::utils::lock::update_package_in_lock;
 use crate::utils::dytes::DytesConfig;
@@ -77,17 +77,29 @@ fn get_remote_filename(app_name: &str) -> String {
 pub async fn update_app_info(name: String, version: String) -> Result<()> {
     println!("开始检查应用更新: {} v{}", name, version);
     
-    let rand = get_random_param();
+    // 1. 获取远程版本列表（从 S3 下载 packages.json）
+    let packages_s3_path = "app/packages.json";
+    println!("  从 S3 获取版本列表: {}", packages_s3_path);
     
-    // 1. 获取远程版本列表
-    let url = format!("https://packages.funxdata.com/app/packages.json?rand={}", rand);
-    let response = reqwest::get(&url).await?;
-    if !response.status().is_success() {
-        anyhow::bail!("下载 packages.json 失败: HTTP {}", response.status());
+    // 创建临时目录存放下载的 packages.json
+    let temp_dir = std::env::temp_dir().join("piksel_app_temp");
+    std::fs::create_dir_all(&temp_dir)?;
+    let temp_file = temp_dir.join("packages.json");
+    
+    // 下载 packages.json
+    if !download_file(packages_s3_path, temp_dir.to_str().unwrap()).await {
+        anyhow::bail!("下载 packages.json 失败");
     }
-    let dytes_app_remote_json_text = response.text().await?;
-    let dytes_app_remote_json: RemoteInfo = serde_json::from_str(&dytes_app_remote_json_text)?;
-    let remote_version = dytes_app_remote_json.packages.get(&name).unwrap_or(&version);
+    
+    // 读取 packages.json
+    let packages_content = std::fs::read_to_string(&temp_file)?;
+    let remote_info: RemoteInfo = serde_json::from_str(&packages_content)?;
+    
+    // 清理临时文件
+    let _ = std::fs::remove_file(&temp_file);
+    let _ = std::fs::remove_dir(&temp_dir);
+    
+    let remote_version = remote_info.packages.get(&name).unwrap_or(&version);
     println!("  远程应用版本: {:?}", remote_version);
     
     // 2. 解析版本进行比较
@@ -99,17 +111,26 @@ pub async fn update_app_info(name: String, version: String) -> Result<()> {
         return Ok(());
     }
     
-    // 3. 获取远程包详细信息
+    // 3. 获取远程包详细信息（从 S3 下载 dytes.json）
     println!("  发现新版本 {} -> {}，开始准备更新...", local_version, remote_version_str);
-    let rand = get_random_param();
-    let detail_url = format!("https://packages.funxdata.com/app/{}/dytes.json?rand={}", name, rand);
-    let detail_response = reqwest::get(&detail_url).await?;
-    if !detail_response.status().is_success() {
+    let dytes_s3_path = format!("app/{}/dytes.json", name);
+    println!("  从 S3 获取包详情: {}", dytes_s3_path);
+    
+    let temp_dir = std::env::temp_dir().join("piksel_app_detail_temp");
+    std::fs::create_dir_all(&temp_dir)?;
+    let temp_file = temp_dir.join("dytes.json");
+    
+    if !download_file(&dytes_s3_path, temp_dir.to_str().unwrap()).await {
         eprintln!("获取 {}/dytes.json 失败，跳过", name);
         return Ok(());
     }
-    let remote_app_info_text = detail_response.text().await?;
+    
+    let remote_app_info_text = std::fs::read_to_string(&temp_file)?;
     let remote_app_info: DytesConfig = serde_json::from_str(&remote_app_info_text)?;
+    
+    // 清理临时文件
+    let _ = std::fs::remove_file(&temp_file);
+    let _ = std::fs::remove_dir(&temp_dir);
     
     println!("  远程版本: {}", remote_app_info.version);
     println!("  导出文件: {:?}", remote_app_info.exports);
@@ -118,7 +139,7 @@ pub async fn update_app_info(name: String, version: String) -> Result<()> {
     let app_dir = get_app_dir();
     std::fs::create_dir_all(&app_dir)?;
     
-    // 5. 下载导出的文件
+    // 5. 下载导出的文件（使用 S3 路径）
     for (_source_path, dest_filename) in &remote_app_info.exports {
         // 判断是否为 HTML 文件
         let is_html = is_html_file(dest_filename);
@@ -149,20 +170,16 @@ pub async fn update_app_info(name: String, version: String) -> Result<()> {
             local_filename.clone()
         };
         
-        // 构建远程 URL（添加随机参数）
-        let rand = get_random_param();
-        let remote_url = format!(
-            "https://packages.funxdata.com/app/{}/{}/{}?rand={}",
-            name, remote_app_info.version, remote_filename, rand
-        );
+        // 构建 S3 路径
+        let s3_path = format!("app/{}/{}/{}", name, remote_app_info.version, remote_filename);
         
         // 本地目标路径
         let dest_path = format!("{}/{}", target_dir, local_filename);
         
-        println!("  下载: {} -> {}", remote_url, dest_path);
+        println!("  下载: {} -> {}", s3_path, dest_path);
         
         // 下载文件到目标目录
-        if !download_file(&remote_url, &target_dir).await {
+        if !download_file(&s3_path, &target_dir).await {
             eprintln!("  下载 {} 失败", remote_filename);
             continue;
         }

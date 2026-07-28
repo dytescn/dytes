@@ -1,7 +1,7 @@
 use anyhow::{Result, Context};
 use std::fs;
 use std::path::Path;
-use crate::utils::loader::upload_file;
+use crate::utils::loader::{upload_file, download_from_s3};
 use crate::utils::dytes::DytesConfig;
 
 /// 根据 type 获取对应的远程路径前缀
@@ -29,69 +29,34 @@ fn get_packages_remote_path(pkg_type: &str) -> String {
     }
 }
 
-/// 根据 type 获取 packages.json 的 URL
-fn get_packages_url(pkg_type: &str) -> String {
-    let base_url = "https://packages.funxdata.com";
-    match pkg_type {
-        "app" => format!("{}/app/packages.json", base_url),
-        "core" => format!("{}/core/packages.json", base_url),
-        "sys" => format!("{}/system/packages.json", base_url),
-        "web" => format!("{}/webs/packages.json", base_url),
-        _ => format!("{}/core/packages.json", base_url),
-    }
-}
-
 /// 更新 packages.json
 fn update_packages_json(
     name: &str,
     version: &str,
     pkg_type: &str,
-    packages_url: &str,
     bucket: &str,
     packages_remote_path: &str,
 ) -> Result<()> {
     use chrono::Utc;
     use serde_json::Value;
-    use reqwest::blocking::Client;
     use std::fs;
     
-    println!("  请求 packages.json: {}", packages_url);
+    println!("  从 S3 获取 packages.json: {}/{}", bucket, packages_remote_path);
     
-    // 同步下载远程 packages.json
-    let mut packages_data: Value = match Client::new().get(packages_url).send() {
-        Ok(response) => {
-            let status = response.status();
-            println!("  响应状态: {}", status);
-            if response.status().is_success() {
-                match response.text() {
-                    Ok(text) => {
-                        println!("  获取到 packages.json 内容长度: {} bytes", text.len());
-                        if text.len() < 1000 {
-                            println!("  内容预览: {}", text);
-                        }
-                        serde_json::from_str(&text).unwrap_or_else(|_| {
-                            println!("  解析 JSON 失败，创建新的");
-                            serde_json::json!({
-                                "packages": {},
-                                "updated_at": Utc::now().to_rfc3339()
-                            })
-                        })
-                    }
-                    Err(_) => {
-                        println!("  读取响应内容失败，创建新的");
-                        serde_json::json!({
-                            "packages": {},
-                            "updated_at": Utc::now().to_rfc3339()
-                        })
-                    }
-                }
-            } else {
-                println!("  远程 packages.json 不存在 (HTTP {}), 创建新的", response.status());
+    // 从 S3 下载远程 packages.json
+    let mut packages_data: Value = match download_from_s3(bucket, packages_remote_path) {
+        Ok(text) => {
+            println!("  获取到 packages.json 内容长度: {} bytes", text.len());
+            if text.len() < 1000 {
+                println!("  内容预览: {}", text);
+            }
+            serde_json::from_str(&text).unwrap_or_else(|_| {
+                println!("  解析 JSON 失败，创建新的");
                 serde_json::json!({
                     "packages": {},
                     "updated_at": Utc::now().to_rfc3339()
                 })
-            }
+            })
         }
         Err(e) => {
             println!("  远程 packages.json 不存在: {}, 创建新的", e);
@@ -169,7 +134,6 @@ pub fn publish(json_path: &Path) -> Result<()> {
     // 2. 确定远程路径
     let remote_prefix = get_remote_prefix(pkg_type, &name);
     let packages_remote_path = get_packages_remote_path(pkg_type);
-    let packages_url = get_packages_url(pkg_type);
     
     println!("远程路径前缀: {}", remote_prefix);
     println!("packages.json: {}", packages_remote_path);
@@ -189,7 +153,7 @@ pub fn publish(json_path: &Path) -> Result<()> {
     
     // 4. 更新 packages.json
     println!("更新 packages.json...");
-    if let Err(e) = update_packages_json(&name, &version, pkg_type, &packages_url, bucket, &packages_remote_path) {
+    if let Err(e) = update_packages_json(&name, &version, pkg_type, bucket, &packages_remote_path) {
         eprintln!("  packages.json 更新失败: {}", e);
     } else {
         println!("  packages.json 更新成功");

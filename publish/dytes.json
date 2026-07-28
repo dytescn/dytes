@@ -1,0 +1,11 @@
+{
+  "name": "publish",
+  "version": "1.0.0",
+  "description": "publish for piksel",
+  "keywords": ["piksel"],
+  "author": "funxdata",
+  "type": "core",
+  "exports": {
+    "./target/release/publish.exe": "publish.exe"
+  }
+}

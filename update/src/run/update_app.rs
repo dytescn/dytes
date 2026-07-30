@@ -42,38 +42,6 @@ fn get_filename_from_path(path: &str) -> String {
         .to_string()
 }
 
-/// 获取本地文件名（{app_name}.exe）
-fn get_local_filename(app_name: &str) -> String {
-    #[cfg(target_os = "windows")]
-    {
-        format!("{}.exe", app_name)
-    }
-    #[cfg(target_os = "macos")]
-    {
-        app_name.to_string()
-    }
-    #[cfg(target_os = "linux")]
-    {
-        app_name.to_string()
-    }
-}
-
-/// 获取远程文件名（根据操作系统匹配）
-fn get_remote_filename(app_name: &str) -> String {
-    #[cfg(target_os = "windows")]
-    {
-        format!("{}{}", app_name, "_windows.exe")
-    }
-    #[cfg(target_os = "macos")]
-    {
-        format!("{}{}", app_name, "_macos")
-    }
-    #[cfg(target_os = "linux")]
-    {
-        format!("{}{}", app_name, "_linux")
-    }
-}
-
 pub async fn update_app_info(name: String, version: String) -> Result<()> {
     println!("开始检查应用更新: {} v{}", name, version);
     
@@ -153,22 +121,11 @@ pub async fn update_app_info(name: String, version: String) -> Result<()> {
             app_dir.clone()
         };
         
-        // 获取本地文件名
+        // 获取本地文件名（直接使用 dest_filename）
         let local_filename = get_filename_from_path(dest_filename);
         
-        // 如果是 piksel 相关的可执行文件，使用 app_name 构建文件名
-        let local_filename = if local_filename.contains("piksel") && local_filename.ends_with(".exe") {
-            get_local_filename(&name)
-        } else {
-            local_filename
-        };
-        
-        // 获取远程文件名（根据操作系统匹配）
-        let remote_filename = if local_filename.contains(&name) && local_filename.ends_with(".exe") {
-            get_remote_filename(&name)
-        } else {
-            local_filename.clone()
-        };
+        // 远程文件名直接使用 local_filename（S3 上的文件名）
+        let remote_filename = local_filename.clone();
         
         // 构建 S3 路径
         let s3_path = format!("app/{}/{}/{}", name, remote_app_info.version, remote_filename);

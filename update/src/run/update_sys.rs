@@ -67,9 +67,9 @@ pub async fn update_sys_info(name: String, version: String) -> Result<()> {
     println!("  远程版本: {}", remote_app_info.version);
     println!("  导出文件: {:?}", remote_app_info.exports);
     
-    // 2. 获取应用目录 - library/
+    // 2. 获取应用目录 - libary/
     let app_dir = get_app_dir();
-    let lib_dir = format!("{}/library", app_dir.trim_end_matches('/'));
+    let lib_dir = format!("{}/libary", app_dir.trim_end_matches('/'));
     fs::create_dir_all(&lib_dir)?;
     
     // 3. 下载导出的文件（使用 S3 路径）

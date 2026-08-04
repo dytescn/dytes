@@ -12,8 +12,8 @@ anyhow = "1.0.102"
 dirs = "6.0.0"
 downloader = "0.2.8"
 futures-util = "0.3.33"
-reqwest = { version = "0.13.4", features = ["stream"] }
-rquickjs = "0.12.0"
+reqwest = { version = "0.13.4", features = ["stream", "blocking", "json"] }
+rquickjs = { version = "0.12.2", features = ["futures"] }
 semver = "1.0.28"
 serde = { version = "1.0.150", features = ["derive"] }
 serde_json = "1.0.150"
@@ -24,32 +24,32 @@ toml = "1.1.2"
 aws-sdk-s3 = "1.139.0"
 aws-config = { version = "1.1.7", features = ["behavior-version-latest"] }
 aws-credential-types = "1.1.7"
+regex = "1.13.1"
 
 [build-dependencies]
 slint-build = "1.17.0"
 
+# ---------- 平台相关 ----------
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { 
+    version = "0.62.2",
+    features = [
+        "Win32_Foundation",
+        "Win32_System_Console",
+        "Win32_System_Threading"
+    ]
+}
+
 [dev-dependencies]
 tempfile = "3.8"
 walkdir = "2.4"
+tokio = { version = "1.52.3", features = ["full", "rt"] }
 
 [profile.release]
-# 优化级别
 opt-level = 3
-
-# 启用链接时优化 (LTO)
 lto = true
-
-# 启用胖 LTO (跨 crate 优化)
 codegen-units = 1
-
-# 启用 panic 时立即中止，减少二进制大小
 panic = "abort"
-
-# 禁用增量编译
 incremental = false
-
-# 禁用调试信息
 debug = false
-
-# 移除符号表，减小体积
 strip = true

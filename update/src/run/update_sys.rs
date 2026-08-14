@@ -1,6 +1,5 @@
 use anyhow::{Result, Context};
 use std::fs;
-use std::path::Path;
 use crate::utils::env::get_app_dir;
 use crate::utils::lock::update_package_in_lock;
 use crate::utils::dytes::DytesConfig;

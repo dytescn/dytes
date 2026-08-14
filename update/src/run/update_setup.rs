@@ -1,57 +1,81 @@
-use anyhow::{Result, Context as AnyhowContext};
+use anyhow::{Context as AnyhowContext, Result};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use rquickjs::{Context, Runtime, Function, Object};
 use std::thread;
 use std::time::Duration;
 
+use crate::utils::script::{extract_http_requests_to_vec, send_http_requests};
+
 const PID_FILE: &str = "./run.pid";
 
-/// 检测 cyctron.exe 是否运行
+/// 检测 cyctron.exe 是否运行（若 PID 文件存在但进程已死，则清理文件并返回 false）
 pub fn is_cyctron_running() -> bool {
-    if !std::path::Path::new(PID_FILE).exists() {
+    let pid_path = Path::new(PID_FILE);
+    if !pid_path.exists() {
         return false;
     }
-    if let Ok(content) = fs::read_to_string(PID_FILE) {
-        if let Ok(pid) = content.trim().parse::<u32>() {
-            return is_process_alive(pid);
+
+    let content = match fs::read_to_string(PID_FILE) {
+        Ok(c) => c,
+        Err(_) => {
+            let _ = fs::remove_file(PID_FILE);
+            return false;
         }
+    };
+
+    let pid: u32 = match content.trim().parse() {
+        Ok(p) => p,
+        Err(_) => {
+            let _ = fs::remove_file(PID_FILE);
+            return false;
+        }
+    };
+
+    let alive = is_process_alive(pid);
+    if !alive {
+        let _ = fs::remove_file(PID_FILE);
     }
-    false
+    alive
 }
 
 /// 检测进程是否存活
 fn is_process_alive(pid: u32) -> bool {
     #[cfg(unix)]
-    unsafe { libc::kill(pid as i32, 0) == 0 }
+    unsafe {
+        libc::kill(pid as i32, 0) == 0
+    }
     #[cfg(windows)]
     unsafe {
         use windows::Win32::Foundation::CloseHandle;
         use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
         match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
-            Ok(handle) => { let _ = CloseHandle(handle); true }
+            Ok(handle) => {
+                let _ = CloseHandle(handle);
+                true
+            }
             Err(_) => false,
         }
     }
 }
 
-/// 停止 cyctron.exe
+/// 停止 cyctron.exe（公共导出）
 pub fn stop_cyctron() -> Result<()> {
     if !is_cyctron_running() {
         println!("  cyctron.exe 未运行");
+        let _ = fs::remove_file(PID_FILE);
         return Ok(());
     }
 
     let content = fs::read_to_string(PID_FILE)?;
     let pid: u32 = content.trim().parse()?;
-    
+
     #[cfg(windows)]
     {
         let output = Command::new("taskkill")
             .args(&["/PID", &pid.to_string(), "/F"])
             .output()?;
-        
+
         if output.status.success() {
             println!("  cyctron.exe (PID: {}) 已停止", pid);
             let _ = fs::remove_file(PID_FILE);
@@ -61,7 +85,7 @@ pub fn stop_cyctron() -> Result<()> {
             Err(anyhow::anyhow!("停止 cyctron.exe 失败: {}", err_msg))
         }
     }
-    
+
     #[cfg(unix)]
     {
         unsafe {
@@ -76,158 +100,71 @@ pub fn stop_cyctron() -> Result<()> {
     }
 }
 
-/// 启动 cyctron.exe
+/// 启动 cyctron.exe（公共导出）
 pub fn start_cyctron() -> Result<()> {
     if is_cyctron_running() {
         println!("  cyctron.exe 已在运行");
         return Ok(());
     }
-    
+
     let exe = if cfg!(windows) { "./cyctron.exe" } else { "./cyctron" };
     println!("  启动: {}", exe);
-    
+
     let child = Command::new(exe)
         .arg("start")
         .spawn()
         .context("启动 cyctron.exe 失败")?;
-    
+
     thread::sleep(Duration::from_millis(500));
-    
+
     #[cfg(windows)]
     let pid = child.id();
-    
+
     #[cfg(unix)]
     let pid = child.id().ok_or_else(|| anyhow::anyhow!("无法获取进程 PID"))?;
-    
+
     fs::write(PID_FILE, pid.to_string())?;
     println!("  cyctron.exe (PID: {}) 已启动", pid);
-    
+
     Ok(())
 }
 
-/// 执行单个 init 脚本（升级版：支持 await fetch 转换）
+/// 执行单个 init 脚本（解析脚本中的 HTTP 请求并发送）
 fn execute_init_script(script_path: &str) -> Result<()> {
     println!("  执行初始化脚本: {}", script_path);
-    let script_content = fs::read_to_string(script_path)
-        .with_context(|| format!("读取脚本文件失败: {}", script_path))?;
 
-    // 1. 转换：await fetch( -> rustFetch(
-    let mut transformed = script_content.replace("await fetch(", "rustFetch(");
+    // 1. 使用 oxc 静态解析脚本，提取所有 HTTP 请求
+    let requests = extract_http_requests_to_vec(script_path)?;
 
-    // 2. 自动提取变量名并添加返回语句（如果存在 const 变量 = rustFetch(...)）
-    if let Some(start) = transformed.find("const ") {
-        let after_const = &transformed[start + 6..];
-        if let Some(eq_pos) = after_const.find('=') {
-            let var_name = after_const[..eq_pos].trim();
-            if !transformed.trim_end().ends_with(&format!("{};", var_name)) {
-                transformed = format!("{}\n{};", transformed.trim_end(), var_name);
-            }
-        }
+    // 2. 打印提取到的所有请求（便于调试）
+    println!("  提取到 {} 个 HTTP 请求", requests.len());
+    for (i, req) in requests.iter().enumerate() {
+        println!("  [请求 {}]", i + 1);
+        println!("    Method : {}", req.method);
+        println!("    URL    : {}", req.url);
+        println!("    Headers: {:?}", req.headers);
+        println!("    Body   : {}", req.body);
     }
 
-    println!("  转换后脚本:\n{}", transformed);
+    // 3. 按顺序发送请求
+    send_http_requests(requests)?;
 
-    let runtime = Runtime::new()?;
-    let context = Context::full(&runtime)?;
-
-    context.with(|ctx| -> Result<(), anyhow::Error> {
-        // 注册 rustFetch 同步函数
-        let rust_fetch = Function::new(ctx.clone(), |url: String, options: Object| -> String {
-            let method = options
-                .get::<_, String>("method")
-                .unwrap_or_else(|_| "GET".to_string());
-            let headers = options.get::<_, Object>("headers").ok();
-            let body = options.get::<_, String>("body").ok();
-
-            // 使用 blocking client，禁用代理
-            let client = reqwest::blocking::Client::builder()
-                .no_proxy()
-                .build()
-                .unwrap();
-
-            let method_parsed = match method.to_uppercase().as_str() {
-                "GET" => reqwest::Method::GET,
-                "POST" => reqwest::Method::POST,
-                "PUT" => reqwest::Method::PUT,
-                "DELETE" => reqwest::Method::DELETE,
-                "PATCH" => reqwest::Method::PATCH,
-                _ => reqwest::Method::GET,
-            };
-
-            let mut request = client.request(method_parsed, &url);
-
-            if let Some(headers_obj) = headers {
-                let keys: Vec<String> = headers_obj
-                    .keys::<String>()
-                    .filter_map(Result::ok)
-                    .collect();
-                for key in keys {
-                    if let Ok(value) = headers_obj.get::<_, String>(&key) {
-                        request = request.header(&key, value);
-                    }
-                }
-            }
-
-            if let Some(body_str) = body {
-                request = request.body(body_str);
-            }
-
-            match request.send() {
-                Ok(response) => match response.text() {
-                    Ok(text) => text,
-                    Err(e) => format!("读取响应失败: {}", e),
-                },
-                Err(e) => format!("请求失败: {}", e),
-            }
-        })?;
-        ctx.globals().set("rustFetch", rust_fetch)?;
-
-        // 执行转换后的脚本
-        match ctx.eval::<rquickjs::Value, _>(transformed.as_str()) {
-            Ok(result) => {
-                if let Some(s) = result.as_string() {
-                    if let Ok(s) = s.to_string() {
-                        if !s.is_empty() {
-                            println!("  脚本输出: {}", s);
-                        }
-                    }
-                }
-                println!("  init 脚本执行成功");
-                Ok(())
-            }
-            Err(e) => {
-                eprintln!("  执行 init 脚本失败: {}", e);
-                Err(anyhow::anyhow!("QuickJS 执行失败: {}", e))
-            }
-        }
-    })?;
-
+    println!("  init 脚本执行成功");
     Ok(())
 }
 
-/// 主入口：执行 Web 资源的 init 脚本
+/// 执行单个包内的所有 init 脚本（不管理 cyctron 生命周期，需外部保证 cyctron 已启动）
 pub fn setup_webs_init(web_dir: &str, init_scripts: &[String]) -> Result<()> {
     if init_scripts.is_empty() {
         println!("  没有 init 脚本需要执行");
         return Ok(());
     }
-    
-    println!("  检测到 {} 个 init 脚本，开始执行...", init_scripts.len());
-    
-    // 启动 cyctron
-    if !is_cyctron_running() {
-        println!("  cyctron.exe 未运行，先启动...");
-        start_cyctron()?;
-    } else {
-        println!("  cyctron.exe 已在运行");
-    }
-    
-    // 执行所有脚本
+
     let mut has_error = false;
     for script in init_scripts {
         let clean_script = script.trim_start_matches("./");
         let script_path = Path::new(web_dir).join(clean_script);
-        
+
         if script_path.exists() {
             if let Err(e) = execute_init_script(script_path.to_str().unwrap_or(script)) {
                 eprintln!("  执行 init 脚本 {} 失败: {}", script, e);
@@ -238,16 +175,48 @@ pub fn setup_webs_init(web_dir: &str, init_scripts: &[String]) -> Result<()> {
             has_error = true;
         }
     }
-    
-    // 无论成功还是失败，都关闭 cyctron
+
+    if has_error {
+        Err(anyhow::anyhow!("部分脚本执行失败"))
+    } else {
+        Ok(())
+    }
+}
+
+/// 批量执行所有 Web 包的 init 脚本（统一管理 cyctron 生命周期）
+pub fn run_all_init_scripts(scripts_list: Vec<(String, Vec<String>)>) -> Result<()> {
+    if scripts_list.is_empty() {
+        println!("  没有需要执行的 init 脚本");
+        return Ok(());
+    }
+
+    println!(
+        "  检测到 {} 个 Web 包需要执行 init 脚本，统一处理...",
+        scripts_list.len()
+    );
+
+    // 1. 启动 cyctron
+    start_cyctron()?;
+
+    // 2. 依次执行每个包的所有脚本
+    let mut overall_error = false;
+    for (web_dir, init_scripts) in scripts_list {
+        println!("  执行包: {}", web_dir);
+        if let Err(e) = setup_webs_init(&web_dir, &init_scripts) {
+            eprintln!("  包 {} 的脚本执行失败: {}", web_dir, e);
+            overall_error = true;
+        }
+    }
+
+    // 3. 统一关闭 cyctron（并删除 PID 文件）
     println!("  关闭 cyctron.exe...");
     if let Err(e) = stop_cyctron() {
         eprintln!("  关闭 cyctron.exe 失败: {}", e);
+        let _ = fs::remove_file(PID_FILE);
     }
-    
-    if has_error {
-        println!("  部分脚本执行失败");
-        Err(anyhow::anyhow!("部分脚本执行失败"))
+
+    if overall_error {
+        Err(anyhow::anyhow!("部分包的 init 脚本执行失败"))
     } else {
         println!("  所有 init 脚本执行完成");
         Ok(())

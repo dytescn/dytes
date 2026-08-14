@@ -6,3 +6,4 @@ pub mod loader;
 pub mod version;
 pub mod lock;
 pub mod dytes;
+pub mod script;

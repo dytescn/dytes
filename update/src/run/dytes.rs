@@ -3,7 +3,7 @@ use anyhow::Result;
 use crate::utils::lock::{read_lock, get_package_version_from_lock};
 use crate::utils::version::check_version;
 use crate::utils::dytes::{DytesConfig, read_dytes_config, print_config_info};
-use super::update_setup::setup_webs_init;
+use super::update_setup::run_all_init_scripts;
 
 /// 进度回调类型
 pub type ProgressCallback = Box<dyn Fn(f32, &str) + Send + Sync>;
@@ -189,13 +189,30 @@ pub async fn init_dytes_with_progress(progress_callback: Option<ProgressCallback
         }
     }
     
-    // 5. 所有 Web 资源更新完成后，统一执行 init 脚本
+    // 5. 所有 Web 资源更新完成后，统一执行 init 脚本（批量处理，统一管理 cyctron 生命周期）
     if !web_init_results.is_empty() {
         println!("\n执行 Web 资源初始化脚本...");
-        for result in web_init_results {
-            if let Err(e) = setup_webs_init(&result.web_dir, &result.init_scripts) {
-                eprintln!("  执行 {} 的 init 脚本失败: {}", result.package_name, e);
+        
+        // 排序：确保 "init" 包最先执行（顺序依赖）
+        web_init_results.sort_by(|a, b| {
+            if a.package_name == "init" && b.package_name != "init" {
+                std::cmp::Ordering::Less
+            } else if b.package_name == "init" && a.package_name != "init" {
+                std::cmp::Ordering::Greater
+            } else {
+                a.package_name.cmp(&b.package_name)
             }
+        });
+
+        // 转换为批量参数
+        let scripts_batch: Vec<(String, Vec<String>)> = web_init_results
+            .into_iter()
+            .map(|r| (r.web_dir, r.init_scripts))
+            .collect();
+
+        // 调用统一执行函数（内部启动/停止 cyctron）
+        if let Err(e) = run_all_init_scripts(scripts_batch) {
+            eprintln!("  执行 Web init 脚本失败: {}", e);
         }
     }
     

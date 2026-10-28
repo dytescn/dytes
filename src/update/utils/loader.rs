@@ -1,4 +1,4 @@
-use crate::shared::credentials::{builtin_s3, ResolvedS3};
+use crate::shared::credentials::{effective_s3, ResolvedS3};
 use anyhow::{anyhow, Context, Result};
 use aws_config::BehaviorVersion;
 use aws_credential_types::Credentials;
@@ -28,7 +28,7 @@ fn is_s3_path(path: &str) -> bool {
 const FETCH_RETRIES: u32 = 3;
 
 fn s3_settings() -> ResolvedS3 {
-    builtin_s3()
+    effective_s3()
 }
 
 fn bucket() -> String {

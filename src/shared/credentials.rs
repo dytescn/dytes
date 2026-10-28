@@ -174,6 +174,13 @@ pub fn builtin_s3() -> ResolvedS3 {
     }
 }
 
+/// 运行时有效的 S3 配置：用户配置 / 环境变量优先，构建内置值兜底。
+pub fn effective_s3() -> ResolvedS3 {
+    ToolConfig::load()
+        .map(|config| config.resolve().s3)
+        .unwrap_or_else(|_| builtin_s3())
+}
+
 pub fn mask(value: Option<&str>) -> String {
     match value {
         None => "(未设置)".to_string(),

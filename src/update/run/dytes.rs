@@ -317,7 +317,7 @@ pub async fn check_updates_with(sync_online: bool) -> Result<bool> {
 }
 
 /// 单独执行已安装 Web 包的 setup.ts（用于数据库 / 路由重建）
-pub fn run_init_scripts() -> Result<()> {
+pub async fn run_init_scripts() -> Result<()> {
     let app_dir = get_app_dir();
     let web_root = std::path::Path::new(&app_dir).join("web");
     let mut scripts: Vec<(String, Vec<String>)> = Vec::new();
@@ -358,7 +358,7 @@ pub fn run_init_scripts() -> Result<()> {
         b_init.cmp(&a_init).then_with(|| a.0.cmp(&b.0))
     });
 
-    run_all_init_scripts(scripts)
+    run_all_init_scripts(scripts).await
 }
 
 pub async fn init_dytes() -> Result<()> {
@@ -600,7 +600,7 @@ pub async fn init_dytes_with_options(
         );
 
         // 调用统一执行函数（内部启动/停止 cyctron）
-        if let Err(e) = run_all_init_scripts(scripts_batch) {
+        if let Err(e) = run_all_init_scripts(scripts_batch).await {
             eprintln!("  执行 init 脚本失败: {}", e);
             failures.push(format!("init 脚本: {}", e));
         }

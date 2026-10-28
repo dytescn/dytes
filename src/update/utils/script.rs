@@ -82,8 +82,8 @@ pub fn extract_http_requests(script_path: &str) -> Result<()> {
 
 // ---------- 发送请求函数 ----------
 
-pub fn send_http_requests(requests: Vec<HttpRequest>) -> Result<()> {
-    let client = reqwest::blocking::Client::builder()
+pub async fn send_http_requests(requests: Vec<HttpRequest>) -> Result<()> {
+    let client = reqwest::Client::builder()
         .no_proxy()
         .build()
         .map_err(|e| anyhow!("构建 HTTP 客户端失败: {}", e))?;
@@ -110,12 +110,13 @@ pub fn send_http_requests(requests: Vec<HttpRequest>) -> Result<()> {
             builder = builder.body(req.body.clone());
         }
 
-        match builder.send() {
+        match builder.send().await {
             Ok(response) => {
                 let status = response.status();
                 println!("响应状态: {}", status);
                 let response_text = response
                     .text()
+                    .await
                     .unwrap_or_else(|_| "读取响应失败".to_string());
                 println!("响应内容: {}", response_text);
             }

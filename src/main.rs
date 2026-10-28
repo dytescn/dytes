@@ -399,6 +399,22 @@ fn run_update(args: UpdateArgs) -> Result<()> {
         std::env::set_current_dir(dir)
             .map_err(|e| DytesError::failed(format!("切换目录失败: {e}")))?;
     }
+
+    // 更新链路包含多层 async future；给独立线程更大的栈，避免 Windows
+    // 主线程 1 MiB 栈在 debug 构建下溢出。
+    let handle = std::thread::Builder::new()
+        .name("dytes-update".to_string())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(move || run_update_inner(args))
+        .map_err(|e| DytesError::failed(format!("创建更新线程失败: {e}")))?;
+
+    match handle.join() {
+        Ok(result) => result,
+        Err(_) => Err(DytesError::failed("更新线程异常退出")),
+    }
+}
+
+fn run_update_inner(args: UpdateArgs) -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|e| DytesError::failed(format!("创建异步运行时失败: {e}")))?;
     let sync_online = !args.offline;
@@ -410,6 +426,7 @@ fn run_update(args: UpdateArgs) -> Result<()> {
         }
         if args.init {
             return dytes::update::run::dytes::run_init_scripts()
+                .await
                 .map_err(|e| DytesError::failed(format!("执行 init 脚本失败: {e:#}")));
         }
         if args.check {

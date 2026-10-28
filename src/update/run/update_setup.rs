@@ -159,7 +159,7 @@ pub fn start_cyctron() -> Result<()> {
 }
 
 /// 执行单个 init 脚本（解析脚本中的 HTTP 请求并发送）
-fn execute_init_script(script_path: &str) -> Result<()> {
+async fn execute_init_script(script_path: &str) -> Result<()> {
     println!("  执行初始化脚本: {}", script_path);
 
     // 1. 使用 oxc 静态解析脚本，提取所有 HTTP 请求
@@ -176,14 +176,14 @@ fn execute_init_script(script_path: &str) -> Result<()> {
     }
 
     // 3. 按顺序发送请求
-    send_http_requests(requests)?;
+    send_http_requests(requests).await?;
 
     println!("  init 脚本执行成功");
     Ok(())
 }
 
 /// 执行单个包内的所有 init 脚本（不管理 cyctron 生命周期，需外部保证 cyctron 已启动）
-pub fn setup_webs_init(web_dir: &str, init_scripts: &[String]) -> Result<()> {
+pub async fn setup_webs_init(web_dir: &str, init_scripts: &[String]) -> Result<()> {
     if init_scripts.is_empty() {
         println!("  没有 init 脚本需要执行");
         return Ok(());
@@ -195,7 +195,7 @@ pub fn setup_webs_init(web_dir: &str, init_scripts: &[String]) -> Result<()> {
         let script_path = Path::new(web_dir).join(clean_script);
 
         if script_path.exists() {
-            if let Err(e) = execute_init_script(script_path.to_str().unwrap_or(script)) {
+            if let Err(e) = execute_init_script(script_path.to_str().unwrap_or(script)).await {
                 eprintln!("  执行 init 脚本 {} 失败: {}", script, e);
                 has_error = true;
             }
@@ -213,7 +213,7 @@ pub fn setup_webs_init(web_dir: &str, init_scripts: &[String]) -> Result<()> {
 }
 
 /// 批量执行所有 Web 包的 init 脚本（统一管理 cyctron 生命周期）
-pub fn run_all_init_scripts(scripts_list: Vec<(String, Vec<String>)>) -> Result<()> {
+pub async fn run_all_init_scripts(scripts_list: Vec<(String, Vec<String>)>) -> Result<()> {
     if scripts_list.is_empty() {
         println!("  没有需要执行的 init 脚本");
         return Ok(());
@@ -231,7 +231,7 @@ pub fn run_all_init_scripts(scripts_list: Vec<(String, Vec<String>)>) -> Result<
     let mut overall_error = false;
     for (web_dir, init_scripts) in scripts_list {
         println!("  执行包: {}", web_dir);
-        if let Err(e) = setup_webs_init(&web_dir, &init_scripts) {
+        if let Err(e) = setup_webs_init(&web_dir, &init_scripts).await {
             eprintln!("  包 {} 的脚本执行失败: {}", web_dir, e);
             overall_error = true;
         }

@@ -1,4 +1,4 @@
-use crate::shared::credentials::{builtin_s3, ResolvedS3};
+use crate::shared::credentials::{effective_s3, ResolvedS3};
 use aws_config::BehaviorVersion;
 use aws_credential_types::Credentials;
 use aws_sdk_s3::config::{Config, Region};
@@ -11,7 +11,7 @@ use std::time::Duration;
 const MAX_RETRIES: u32 = 3;
 
 fn s3_settings() -> ResolvedS3 {
-    builtin_s3()
+    effective_s3()
 }
 const MULTIPART_THRESHOLD: u64 = 100 * 1024 * 1024;
 const PART_SIZE: usize = 16 * 1024 * 1024;

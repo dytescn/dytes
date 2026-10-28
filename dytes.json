@@ -1,0 +1,25 @@
+{
+  "name": "dytes",
+  "version": "0.1.4",
+  "description": "Piksel package installer, updater and publisher",
+  "keywords": [
+    "piksel",
+    "package",
+    "installer",
+    "updater"
+  ],
+  "author": "funxdata",
+  "type": "core",
+  "license": "MIT",
+  "platform-exports": {
+    "windows": {
+      "./target/release/dytes.exe": "dytes.exe"
+    },
+    "linux": {
+      "./target/release/dytes": "dytes"
+    },
+    "macos": {
+      "./target/release/dytes": "dytes"
+    }
+  }
+}

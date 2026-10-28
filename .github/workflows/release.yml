@@ -1,0 +1,192 @@
+name: Release dytes
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dytes-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    environment: product
+    env:
+      UPYUN_API_KEY: ${{ secrets.UPYUN_API_KEY }}
+      UPYUN_API_SECRET: ${{ secrets.UPYUN_API_SECRET }}
+      UPYUN_BUCKET: ${{ secrets.UPYUN_BUCKET }}
+      UPYUN_ENDPOINT: ${{ secrets.UPYUN_ENDPOINT }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+            binary: dytes.exe
+            artifact: dytes-windows.exe
+          - os: ubuntu-latest
+            platform: linux
+            binary: dytes
+            artifact: dytes-linux
+          - os: macos-latest
+            platform: macos
+            binary: dytes
+            artifact: dytes-macos
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Unix build dependencies
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update
+            sudo apt-get install -y cmake ninja-build pkg-config
+          else
+            brew install cmake ninja pkg-config
+          fi
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Test library
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --lib --locked 2>&1 | tee test.log
+
+      - name: Test summary
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo '```text'
+            tail -120 test.log 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build dytes
+        run: cargo build --release --locked
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./dytes.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Publishing dytes $version for ${{ matrix.platform }}"
+
+      - name: Verify manifest and Cargo version
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest_version=$(node -p "require('./dytes.json').version")
+          cargo_version=$(cargo metadata --format-version 1 --no-deps \
+            | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log(j.packages.find(p=>p.name==="dytes").version)})')
+          echo "manifest=$manifest_version cargo=$cargo_version"
+          test "$manifest_version" = "$cargo_version"
+
+      - name: Prepare artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p upload artifact
+          cp "target/release/${{ matrix.binary }}" "upload/${{ matrix.binary }}"
+          cp "target/release/${{ matrix.binary }}" "artifact/${{ matrix.artifact }}"
+          ls -l upload artifact
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dytes-${{ matrix.platform }}
+          path: artifact/
+          if-no-files-found: error
+
+      - name: Upload binary to UpYun S3
+        uses: shallwefootball/s3-upload-action@master
+        with:
+          aws_key_id: ${{ secrets.UPYUN_API_KEY }}
+          aws_secret_access_key: ${{ secrets.UPYUN_API_SECRET }}
+          aws_bucket: ${{ secrets.UPYUN_BUCKET }}
+          source_dir: upload
+          destination_dir: core/dytes/${{ steps.version.outputs.version }}/${{ matrix.platform }}
+          endpoint: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
+
+  publish-manifest:
+    name: Publish dytes.json
+    needs: build
+    runs-on: ubuntu-latest
+    environment: product
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./dytes.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p upload-manifest
+          cp dytes.json upload-manifest/dytes.json
+          ls -l upload-manifest
+
+      - name: Upload manifest to UpYun S3
+        uses: shallwefootball/s3-upload-action@master
+        with:
+          aws_key_id: ${{ secrets.UPYUN_API_KEY }}
+          aws_secret_access_key: ${{ secrets.UPYUN_API_SECRET }}
+          aws_bucket: ${{ secrets.UPYUN_BUCKET }}
+          source_dir: upload-manifest
+          destination_dir: core/dytes
+          endpoint: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
+
+  github-release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - build
+      - publish-manifest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/**/*
+            dytes.json
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

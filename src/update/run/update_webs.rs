@@ -72,6 +72,8 @@ pub async fn update_webs_info(
             dep_name.clone(),
             dep_version.clone(),
             update_design::DesignKind::Plugin,
+            false,
+            None,
         )
         .await?;
     }
@@ -81,6 +83,8 @@ pub async fn update_webs_info(
             dep_name.clone(),
             dep_version.clone(),
             update_design::DesignKind::Soft,
+            false,
+            None,
         )
         .await?;
     }

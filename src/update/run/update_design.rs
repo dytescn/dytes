@@ -15,6 +15,13 @@ pub enum DesignKind {
 }
 
 impl DesignKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DesignKind::Plugin => "design_plugins",
+            DesignKind::Soft => "design_soft",
+        }
+    }
+
     fn remote_dir(self) -> &'static str {
         match self {
             DesignKind::Plugin => "design_plugins",
@@ -37,6 +44,19 @@ impl DesignKind {
     }
 }
 
+/// 单个设计包的安装 / 更新结果。
+#[derive(Debug, Clone)]
+pub struct DesignUpdateResult {
+    pub name: String,
+    pub version: String,
+    /// 安装目录（相对安装根目录）。
+    pub path: String,
+    /// 本次安装的导出文件。
+    pub files: Vec<String>,
+    /// 本地版本已不低于线上版本，未执行下载。
+    pub skipped: bool,
+}
+
 /// 去除版本号前缀（^ / ~）
 fn parse_version(version: &str) -> Option<String> {
     let cleaned = version.trim_start_matches('^').trim_start_matches('~');
@@ -51,7 +71,9 @@ pub async fn update_design_info(
     name: String,
     declared_version: String,
     kind: DesignKind,
-) -> Result<()> {
+    force: bool,
+    expected_version: Option<&str>,
+) -> Result<DesignUpdateResult> {
     let remote_dir = kind.remote_dir();
     println!(
         "更新设计{}: {} (声明版本 {})",
@@ -70,6 +92,16 @@ pub async fn update_design_info(
     let remote_info: DytesConfig =
         serde_json::from_str(&remote_text).with_context(|| format!("解析 {} 失败", s3_path))?;
 
+    if let Some(expected) = expected_version {
+        if expected != remote_info.version {
+            anyhow::bail!(
+                "指定版本 {} 与线上最新版本 {} 不一致；当前只支持安装最新版本",
+                expected,
+                remote_info.version
+            );
+        }
+    }
+
     let platform = crate::update::utils::platform::current_platform();
     let Some((exports, platform_tag)) =
         crate::update::utils::platform::select_exports(&remote_info, &platform)
@@ -86,20 +118,7 @@ pub async fn update_design_info(
     println!("  平台: {}", platform);
     println!("  导出文件: {:?}", exports);
 
-    // 2. 版本比较：锁文件版本不低于远程版本时跳过
-    if let Ok(Some(lock_version)) = get_package_version_from_lock(&name) {
-        if let (Some(local), Some(remote)) = (
-            parse_version(&lock_version),
-            parse_version(&remote_info.version),
-        ) {
-            if !check_version(&local, &remote) {
-                println!("  已是最新版本 (v{})，跳过下载", local);
-                return Ok(());
-            }
-        }
-    }
-
-    // 3. 安装目录：插件 -> plugins/<name>；设计软件 -> apps/<name>
+    // 2. 安装目录：插件 -> plugins/<name>；设计软件 -> apps/<name>
     let app_dir = get_app_dir();
     let package_dir = format!(
         "{}/{}/{}",
@@ -107,6 +126,29 @@ pub async fn update_design_info(
         kind.local_dir(),
         name
     );
+    let files: Vec<String> = exports.values().cloned().collect();
+
+    // 3. 版本比较：锁文件版本不低于远程版本时跳过
+    if !force {
+        if let Ok(Some(lock_version)) = get_package_version_from_lock(&name) {
+            if let (Some(local), Some(remote)) = (
+                parse_version(&lock_version),
+                parse_version(&remote_info.version),
+            ) {
+                if !check_version(&local, &remote) {
+                    println!("  已是最新版本 (v{})，跳过下载", local);
+                    return Ok(DesignUpdateResult {
+                        name,
+                        version: remote_info.version.clone(),
+                        path: package_dir,
+                        files,
+                        skipped: true,
+                    });
+                }
+            }
+        }
+    }
+
     fs::create_dir_all(&package_dir)?;
     println!("  安装目录: {}", package_dir);
 
@@ -124,7 +166,13 @@ pub async fn update_design_info(
         }
     }
 
-    // 5. 设计插件额外注册到 libary，供 cyctron 加载
+    // 5. 保存云端清单，供插件管理库读取 use_ai / targets，也供设计软件读取入口
+    let manifest_path = format!("{package_dir}/dytes.json");
+    fs::write(&manifest_path, &remote_text)
+        .with_context(|| format!("保存 {} 失败", manifest_path))?;
+    println!("  保存清单: {}", manifest_path);
+
+    // 6. 设计插件额外注册到 libary，供 cyctron 加载
     if kind == DesignKind::Plugin {
         let lib_dir = format!("{}/libary", app_dir.trim_end_matches('/'));
         fs::create_dir_all(&lib_dir)?;
@@ -141,7 +189,7 @@ pub async fn update_design_info(
         }
     }
 
-    // 6. 写锁文件
+    // 7. 写锁文件
     let mut loader = Vec::new();
     for (source, dest) in exports {
         loader.push(vec![source.clone(), dest.clone()]);
@@ -154,5 +202,12 @@ pub async fn update_design_info(
         name,
         remote_info.version
     );
-    Ok(())
+
+    Ok(DesignUpdateResult {
+        name,
+        version: remote_info.version,
+        path: package_dir,
+        files,
+        skipped: false,
+    })
 }

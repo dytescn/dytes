@@ -1,10 +1,12 @@
 use clap::{Args, Parser, Subcommand};
+use dytes::install::service::package as install_package;
 use dytes::shared::config::{DytesConfig, PackageType};
 use dytes::shared::credentials::{mask, ToolConfig};
 use dytes::shared::error::{DytesError, Result};
 use dytes::shared::package;
 use dytes::shared::platform;
 use dytes::shared::templates;
+use dytes::update::run::update_design::DesignKind;
 use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
@@ -388,10 +390,67 @@ fn run_publish(args: PublishArgs) -> Result<()> {
     Ok(())
 }
 
-fn run_install(_args: InstallArgs) -> Result<()> {
-    Err(DytesError::failed(
-        "dytes install 引擎尚未迁移，见 todo.md D-04 / D-05",
-    ))
+fn run_install(args: InstallArgs) -> Result<()> {
+    let dir = args.dir.clone().unwrap_or(std::env::current_dir()?);
+    std::env::set_current_dir(&dir)
+        .map_err(|e| DytesError::failed(format!("切换目录失败: {e}")))?;
+
+    let pkg_type = args.pkg_type.as_deref().ok_or_else(|| {
+        DytesError::args("请指定包类型，例如：dytes install plugin cdr_check_txt")
+    })?;
+    let (name, version) = split_name_version(args.name.as_deref(), args.version.as_deref())?;
+
+    let kind = match pkg_type.trim().to_ascii_lowercase().as_str() {
+        "plugin" | "plugins" | "design_plugins" | "design-plugins" => DesignKind::Plugin,
+        "design-soft" | "design_soft" | "designsoft" => DesignKind::Soft,
+        other => {
+            return Err(DytesError::failed(format!(
+                "install 暂不支持类型 {other}；当前支持 plugin 与 design-soft"
+            )))
+        }
+    };
+
+    let value = install_package::install_design(&name, kind, version.as_deref(), args.force)
+        .map_err(|e| DytesError::failed(format!("安装失败: {e:#}")))?;
+
+    if args.json {
+        println!("{}", value);
+    } else {
+        let action = if value["skipped"].as_bool().unwrap_or(false) {
+            "已是最新版本"
+        } else {
+            "已安装"
+        };
+        println!(
+            "{action}: {} {} v{} -> {}",
+            value["type"].as_str().unwrap_or(""),
+            name,
+            value["version"].as_str().unwrap_or(""),
+            value["path"].as_str().unwrap_or("")
+        );
+    }
+
+    Ok(())
+}
+
+/// 解析 `name` / `name@version`，并合并 `--version` 参数。
+fn split_name_version(
+    name: Option<&str>,
+    version: Option<&str>,
+) -> Result<(String, Option<String>)> {
+    let raw = name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| DytesError::args("缺少包名"))?;
+
+    let (name, inline_version) = match raw.split_once('@') {
+        Some((name, version)) if !name.is_empty() && !version.is_empty() => {
+            (name.to_string(), Some(version.to_string()))
+        }
+        _ => (raw.to_string(), None),
+    };
+
+    Ok((name, version.map(str::to_string).or(inline_version)))
 }
 
 fn run_update(args: UpdateArgs) -> Result<()> {
@@ -430,10 +489,20 @@ fn run_update_inner(args: UpdateArgs) -> Result<()> {
                 .map_err(|e| DytesError::failed(format!("执行 init 脚本失败: {e:#}")));
         }
         if args.check {
-            let has_updates = dytes::update::run::dytes::check_updates_with(sync_online)
+            let types: Option<Vec<String>> = args.pkg_types.as_ref().map(|value| {
+                value
+                    .split(',')
+                    .map(|item| item.trim().to_string())
+                    .filter(|item| !item.is_empty())
+                    .collect()
+            });
+            let report = dytes::update::run::dytes::check_report(sync_online, types.as_deref())
                 .await
                 .map_err(|e| DytesError::failed(format!("检查更新失败: {e:#}")))?;
-            if has_updates {
+            if args.json {
+                println!("{}", report.value);
+            }
+            if report.has_updates {
                 return Err(DytesError::new(4, "有可用更新"));
             }
             println!("所有依赖已是最新版本");

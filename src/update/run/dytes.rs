@@ -91,24 +91,6 @@ async fn remote_version(pkg_type: &str, name: &str) -> Result<String> {
     Ok(config.version)
 }
 
-/// 检查一组依赖在线上是否有更新
-async fn deps_need_update(
-    deps: &std::collections::HashMap<String, String>,
-    pkg_type: &str,
-) -> bool {
-    for name in deps.keys() {
-        match remote_version(pkg_type, name).await {
-            Ok(remote) => {
-                if need_update(name, &remote) {
-                    return true;
-                }
-            }
-            Err(e) => println!("  检查 {} 线上版本失败: {}", name, e),
-        }
-    }
-    false
-}
-
 /// 删除锁文件中本地文件已缺失的包，强制重新下载
 fn prune_missing_packages() {
     let Ok(lock) = read_lock() else {
@@ -164,12 +146,6 @@ async fn app_need_update(config: &DytesConfig) -> Result<bool> {
     }
 
     Ok(false)
-}
-
-/// 离线模式下按本地声明的版本检查依赖
-fn local_deps_need_update(deps: &std::collections::HashMap<String, String>) -> bool {
-    deps.iter()
-        .any(|(name, version)| need_update(name, version))
 }
 
 /// 扫描线上设计包目录，列出未在本地 dytes.json 声明的包
@@ -247,6 +223,157 @@ pub async fn discover_packages() -> Result<()> {
     Ok(())
 }
 
+/// 更新检查报告。
+pub struct CheckReport {
+    pub has_updates: bool,
+    pub value: serde_json::Value,
+}
+
+/// 规范化包类型别名。
+fn normalize_pkg_type(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "plugin" | "plugins" | "design_plugins" | "design-plugins" => "design_plugins".to_string(),
+        "design_soft" | "design-soft" | "soft" => "design_soft".to_string(),
+        "system" => "sys".to_string(),
+        "webs" => "web".to_string(),
+        "models" => "model".to_string(),
+        "apps" => "app".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// 检查更新并返回结构化结果。
+///
+/// `types` 为空时检查全部类型；指定类型时只检查该类型。检查范围包括
+/// `dytes.json` 声明的依赖，以及 `dytes.lock` 中已安装的同类型包，
+/// 因此未在清单中声明的插件 / 软件也能被发现。
+pub async fn check_report(sync_online: bool, types: Option<&[String]>) -> Result<CheckReport> {
+    use serde_json::json;
+
+    prune_missing_packages();
+    let config = read_dytes_config()?;
+    let lock = read_lock().unwrap_or_default();
+    let local_version = |name: &str| -> Option<String> {
+        lock.package
+            .iter()
+            .find(|package| package.name == name)
+            .map(|package| package.version.clone())
+    };
+
+    let selected = |pkg_type: &str| -> bool {
+        match types {
+            Some(list) if !list.is_empty() => list
+                .iter()
+                .any(|item| normalize_pkg_type(item) == pkg_type),
+            _ => true,
+        }
+    };
+
+    let mut updates: Vec<serde_json::Value> = Vec::new();
+
+    if selected("app") {
+        let local = local_version(&config.name);
+        if sync_online {
+            match app_need_update(&config).await {
+                Ok(needs) => updates.push(json!({
+                    "type": "app",
+                    "name": config.name,
+                    "local_version": local,
+                    "remote_version": serde_json::Value::Null,
+                    "needs_update": needs,
+                })),
+                Err(error) => println!("  检查应用自身更新失败（继续检查依赖）: {}", error),
+            }
+        } else {
+            updates.push(json!({
+                "type": "app",
+                "name": config.name,
+                "local_version": local,
+                "remote_version": serde_json::Value::Null,
+                "needs_update": local.is_none(),
+            }));
+        }
+    }
+
+    let groups: [(&str, &std::collections::HashMap<String, String>); 6] = [
+        ("core", &config.dependencies_core),
+        ("sys", &config.dependencies_sys),
+        ("web", &config.dependencies_web),
+        ("design_plugins", &config.dependencies_design_plugins),
+        ("design_soft", &config.dependencies_design_soft),
+        ("model", &config.dependencies_model),
+    ];
+
+    for (pkg_type, deps) in groups {
+        if !selected(pkg_type) {
+            continue;
+        }
+
+        let mut names: std::collections::BTreeSet<String> = deps.keys().cloned().collect();
+        for package in &lock.package {
+            if package.pkg_type == pkg_type {
+                names.insert(package.name.clone());
+            }
+        }
+
+        for name in names {
+            let local = local_version(&name);
+            let remote = if sync_online {
+                match remote_version(pkg_type, &name).await {
+                    Ok(version) => Some(version),
+                    Err(error) => {
+                        println!("  检查 {} 线上版本失败: {}", name, error);
+                        None
+                    }
+                }
+            } else {
+                deps.get(&name).cloned().or_else(|| local.clone())
+            };
+
+            let needs_update = match (&local, &remote) {
+                (None, _) => true,
+                (Some(_), None) => false,
+                (Some(local), Some(remote)) => match (
+                    semver::Version::parse(&parse_version(local)),
+                    semver::Version::parse(&parse_version(remote)),
+                ) {
+                    (Ok(local), Ok(remote)) => remote > local,
+                    _ => parse_version(local) != parse_version(remote),
+                },
+            };
+
+            updates.push(json!({
+                "type": pkg_type,
+                "name": name,
+                "local_version": local,
+                "remote_version": remote,
+                "needs_update": needs_update,
+            }));
+        }
+    }
+
+    let count = updates
+        .iter()
+        .filter(|item| {
+            item.get("needs_update")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+        })
+        .count();
+
+    let value = json!({
+        "check": true,
+        "types": types.unwrap_or(&[]),
+        "count": count,
+        "updates": updates,
+    });
+
+    Ok(CheckReport {
+        has_updates: count > 0,
+        value,
+    })
+}
+
 /// 检查是否有更新（默认同步线上版本）
 pub async fn check_updates() -> Result<bool> {
     check_updates_with(true).await
@@ -254,66 +381,7 @@ pub async fn check_updates() -> Result<bool> {
 
 /// 检查是否有更新；sync_online=false 时只按本地声明版本判断
 pub async fn check_updates_with(sync_online: bool) -> Result<bool> {
-    prune_missing_packages();
-    let config = read_dytes_config()?;
-
-    // 应用自身：在线模式比较 app/packages.json；离线模式检查锁文件
-    if sync_online {
-        match app_need_update(&config).await {
-            Ok(true) => return Ok(true),
-            Ok(false) => {}
-            Err(e) => println!("  检查应用自身更新失败（继续检查依赖）: {}", e),
-        }
-    } else if get_package_version_from_lock(&config.name)
-        .ok()
-        .flatten()
-        .is_none()
-    {
-        println!("  离线模式：应用不在锁文件，需要更新");
-        return Ok(true);
-    }
-
-    if sync_online {
-        if deps_need_update(&config.dependencies_core, "core").await {
-            return Ok(true);
-        }
-        if deps_need_update(&config.dependencies_sys, "sys").await {
-            return Ok(true);
-        }
-        if deps_need_update(&config.dependencies_web, "web").await {
-            return Ok(true);
-        }
-        if deps_need_update(&config.dependencies_design_plugins, "design_plugins").await {
-            return Ok(true);
-        }
-        if deps_need_update(&config.dependencies_design_soft, "design_soft").await {
-            return Ok(true);
-        }
-        if deps_need_update(&config.dependencies_model, "model").await {
-            return Ok(true);
-        }
-    } else {
-        if local_deps_need_update(&config.dependencies_core) {
-            return Ok(true);
-        }
-        if local_deps_need_update(&config.dependencies_sys) {
-            return Ok(true);
-        }
-        if local_deps_need_update(&config.dependencies_web) {
-            return Ok(true);
-        }
-        if local_deps_need_update(&config.dependencies_design_plugins) {
-            return Ok(true);
-        }
-        if local_deps_need_update(&config.dependencies_design_soft) {
-            return Ok(true);
-        }
-        if local_deps_need_update(&config.dependencies_model) {
-            return Ok(true);
-        }
-    }
-
-    Ok(false)
+    Ok(check_report(sync_online, None).await?.has_updates)
 }
 
 /// 单独执行已安装 Web 包的 setup.ts（用于数据库 / 路由重建）
@@ -507,6 +575,8 @@ pub async fn init_dytes_with_options(
                     name.clone(),
                     version.clone(),
                     update_design::DesignKind::Plugin,
+                    false,
+                    None,
                 )
                 .await
                 {
@@ -535,6 +605,8 @@ pub async fn init_dytes_with_options(
                     name.clone(),
                     version.clone(),
                     update_design::DesignKind::Soft,
+                    false,
+                    None,
                 )
                 .await
                 {

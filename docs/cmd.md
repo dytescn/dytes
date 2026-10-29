@@ -206,11 +206,12 @@ dytes install --gui
 
 ### 4.4 行为
 
-- 应用：准备 core → 下载应用清单 → 执行更新引擎 → 写 `dytes.lock`；
-- 插件 / 包：下载对应 `packages.json` 中的版本 → 写入目标目录 → 更新锁；
-- `web` / 需要初始化的包：执行 `init` 脚本（`--no-init` 跳过）；
+- 当前 CLI 已接入 `plugin` / `design-soft`：复用更新引擎的下载、目录约定与锁文件；
+- 其余类型（app / core / sys / web / model）的安装引擎尚未接入；
+- 插件 → `plugins/<name>/`；设计软件 → `apps/<name>/`；
 - 安装失败不更新锁文件；
-- 重复安装同版本默认跳过，`--force` 重新覆盖。
+- 重复安装同版本默认跳过，`--force` 重新下载覆盖；
+- `--version` 目前只接受与线上最新版本一致的版本。
 
 ---
 
@@ -277,7 +278,28 @@ dytes update --auto
 - 线上模式以 `packages.json` 最新版本为准；离线模式按本地声明版本；
 - 单个依赖失败不阻断其它依赖，最终返回非 0；
 - 成功后写 `dytes.lock`；
-- `--startup` 检查 `auto_update` 与上次检查时间。
+- `--startup` 检查 `auto_update` 与上次检查时间；
+- `--check --json` 输出：
+
+  ```json
+  {
+    "check": true,
+    "types": ["design_plugins"],
+    "count": 1,
+    "updates": [
+      {
+        "type": "design_plugins",
+        "name": "cdr_check_txt",
+        "local_version": "1.0.0",
+        "remote_version": "1.1.0",
+        "needs_update": true
+      }
+    ]
+  }
+  ```
+
+- 检查范围为 `dytes.json` 依赖与 `dytes.lock` 中已安装的同类型包，未在清单声明的插件 / 软件也会被检查；
+- 有更新时退出码为 `4`，JSON 仍写入 stdout。
 
 ---
 

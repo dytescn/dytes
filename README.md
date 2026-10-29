@@ -18,7 +18,7 @@
 | `dytes init` | 可用 | 生成七种包类型的 `dytes.json` 模板 |
 | `dytes publish --dry-run` | 可用 | 输出发布文件与远程路径，不上传 |
 | `dytes publish` | 迁移中 | 实际上传仍待接入 |
-| `dytes install` | 迁移中 | 安装引擎仍待接入 |
+| `dytes install` | 可用（plugin / design-soft） | 复用更新引擎安装设计插件与设计软件；其他包类型待接入 |
 
 ## 包类型
 
@@ -108,7 +108,7 @@ target/release/dytes       # Linux / macOS
 │   ├── lib.rs
 │   ├── shared/       # 配置、凭证、锁文件、平台、模板
 │   ├── update/       # 更新引擎
-│   ├── install/      # 安装逻辑（待接入 CLI）
+│   ├── install/      # 单包安装（plugin / design-soft）
 │   └── publish/      # 发布逻辑
 ├── docs/
 │   ├── dytes.md      # 需求与设计

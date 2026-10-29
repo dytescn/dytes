@@ -223,6 +223,42 @@ pub async fn discover_packages() -> Result<()> {
     Ok(())
 }
 
+/// 启动更新的节流窗口：1 天。
+const STARTUP_INTERVAL_SECS: u64 = 24 * 60 * 60;
+
+/// 判断启动更新是否应执行：遵守 `auto_update`，并在 1 天内跳过。
+pub fn startup_allowed() -> Result<bool> {
+    let config = read_dytes_config()?;
+    if !config.auto_update {
+        println!("  auto_update=false，跳过启动更新");
+        return Ok(false);
+    }
+
+    if let Ok(text) = std::fs::read_to_string(".update_check") {
+        if let Ok(value) = text.trim().parse::<u64>() {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_secs())
+                .unwrap_or(0);
+            if now.saturating_sub(value) < STARTUP_INTERVAL_SECS {
+                println!("  最近已检查，跳过更新");
+                return Ok(false);
+            }
+        }
+    }
+
+    Ok(true)
+}
+
+/// 记录本次启动检查时间。
+pub fn mark_startup_checked() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let _ = std::fs::write(".update_check", now.to_string());
+}
+
 /// 更新检查报告。
 pub struct CheckReport {
     pub has_updates: bool,

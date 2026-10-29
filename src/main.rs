@@ -474,6 +474,13 @@ fn run_update(args: UpdateArgs) -> Result<()> {
 }
 
 fn run_update_inner(args: UpdateArgs) -> Result<()> {
+    if args.startup
+        && !dytes::update::run::dytes::startup_allowed()
+            .map_err(|e| DytesError::failed(format!("检查启动更新状态失败: {e:#}")))?
+    {
+        return Ok(());
+    }
+
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|e| DytesError::failed(format!("创建异步运行时失败: {e}")))?;
     let sync_online = !args.offline;
@@ -508,8 +515,11 @@ fn run_update_inner(args: UpdateArgs) -> Result<()> {
             println!("所有依赖已是最新版本");
             return Ok(());
         }
-        dytes::update::run::dytes::init_dytes_with_options(None, sync_online)
-            .await
-            .map_err(|e| DytesError::failed(format!("更新失败: {e:#}")))
+
+        let result = dytes::update::run::dytes::init_dytes_with_options(None, sync_online).await;
+        if args.startup && result.is_ok() {
+            dytes::update::run::dytes::mark_startup_checked();
+        }
+        result.map_err(|e| DytesError::failed(format!("更新失败: {e:#}")))
     })
 }

@@ -278,7 +278,7 @@ dytes update --auto
 - 线上模式以 `packages.json` 最新版本为准；离线模式按本地声明版本；
 - 单个依赖失败不阻断其它依赖，最终返回非 0；
 - 成功后写 `dytes.lock`；
-- `--startup` 检查 `auto_update` 与上次检查时间；
+- `--startup` 检查 `auto_update` 与上次检查时间（安装根目录的 `.update_check`，Unix 秒），1 天内跳过；
 - `--check --json` 输出：
 
   ```json

@@ -74,7 +74,13 @@ pub async fn update_model_info(name: String, declared_version: String) -> Result
         loader.push(vec![source_path.clone(), dest_filename.clone()]);
     }
 
-    update_package_in_lock(&name, &remote_info.version, "model", loader)?;
+    update_package_in_lock(
+        remote_info.uuid.as_deref(),
+        &name,
+        &remote_info.version,
+        "model",
+        loader,
+    )?;
 
     println!("  模型更新完成: {} v{}", name, remote_info.version);
     Ok(())

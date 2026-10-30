@@ -213,7 +213,13 @@ pub async fn update_sys_info(
     }
 
     // 6. 写入锁文件 - 使用 utils::lock
-    update_package_in_lock(&name, &remote_app_info.version, "sys", loader)?;
+    update_package_in_lock(
+        remote_app_info.uuid.as_deref(),
+        &name,
+        &remote_app_info.version,
+        "sys",
+        loader,
+    )?;
 
     println!("  系统库更新完成: {} v{}", name, remote_app_info.version);
 

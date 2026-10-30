@@ -47,6 +47,8 @@ impl PackageType {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DytesConfig {
     pub name: String,
+    #[serde(default)]
+    pub uuid: Option<String>,
     pub version: String,
     #[serde(default)]
     pub description: Option<String>,

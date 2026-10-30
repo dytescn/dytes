@@ -1,6 +1,6 @@
 [package]
 name = "dytes"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 description = "Piksel package installer, updater, publisher and manifest tool."
 license = "MIT"
@@ -36,6 +36,7 @@ serde = { version = "1.0.150", features = ["derive"] }
 serde_json = "1.0.150"
 tokio = { version = "1.52.3", features = ["full"] }
 toml = "0.8"
+uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

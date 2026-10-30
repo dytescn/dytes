@@ -84,7 +84,13 @@ pub async fn update_os_info(name: String, declared_version: String) -> Result<()
             for (source, dest) in exports {
                 loader.push(vec![source.clone(), dest.clone()]);
             }
-            update_package_in_lock(&name, &remote_app_info.version, "core", loader)?;
+            update_package_in_lock(
+                remote_app_info.uuid.as_deref(),
+                &name,
+                &remote_app_info.version,
+                "core",
+                loader,
+            )?;
             let _ = fs::remove_dir_all(&tmp_dir);
             println!("  更新包已准备: update v{}", remote_app_info.version);
         }
@@ -119,7 +125,13 @@ pub async fn update_os_info(name: String, declared_version: String) -> Result<()
     }
 
     // 5. 写入锁文件 - 使用 utils::lock
-    update_package_in_lock(&name, &remote_app_info.version, "core", loader)?;
+    update_package_in_lock(
+        remote_app_info.uuid.as_deref(),
+        &name,
+        &remote_app_info.version,
+        "core",
+        loader,
+    )?;
 
     println!("  更新完成: {} v{}", name, remote_app_info.version);
     Ok(())

@@ -303,14 +303,20 @@ fn run_init(args: InitArgs) -> Result<()> {
     }
     fs::create_dir_all(&dir)?;
     let manifest = templates::init_manifest(pkg_type, &name, &args.version);
+    let uuid = manifest
+        .get("uuid")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_string();
     fs::write(&path, serde_json::to_string_pretty(&manifest)?)?;
     if args.json {
         println!(
             "{}",
-            json!({ "path": path, "type": pkg_type.as_str(), "name": name, "version": args.version })
+            json!({ "path": path, "type": pkg_type.as_str(), "name": name, "uuid": uuid, "version": args.version })
         );
     } else {
         println!("已生成 {}", path.display());
+        println!("包 UUID: {}", uuid);
         println!("下一步：dytes publish --dry-run");
     }
     Ok(())
@@ -322,6 +328,7 @@ fn run_publish(args: PublishArgs) -> Result<()> {
     let config = DytesConfig::read(&config_path)?;
     let pkg_type = config.package_type()?;
     let platform = args.platform.unwrap_or_else(platform::current_platform);
+    let uuid = config.uuid.as_deref().unwrap_or("");
     let Some((exports, platform_tag)) = platform::select_exports(&config, &platform) else {
         return Err(DytesError::config(format!(
             "当前平台 {platform} 未在 platform-exports 中配置"
@@ -354,6 +361,7 @@ fn run_publish(args: PublishArgs) -> Result<()> {
                 "dry_run": args.dry_run,
                 "type": pkg_type.as_str(),
                 "name": config.name,
+                "uuid": uuid,
                 "version": config.version,
                 "platform": platform,
                 "index": index,
@@ -366,6 +374,14 @@ fn run_publish(args: PublishArgs) -> Result<()> {
             config.name,
             config.version,
             pkg_type.as_str()
+        );
+        println!(
+            "UUID: {}",
+            if uuid.is_empty() {
+                "<publish 时生成>"
+            } else {
+                uuid
+            }
         );
         println!("平台: {platform}");
         println!("索引: {index}");
@@ -382,12 +398,11 @@ fn run_publish(args: PublishArgs) -> Result<()> {
             );
         }
     }
-    if !args.dry_run {
-        return Err(DytesError::failed(
-            "publish 上传引擎尚未接入，请先使用 --dry-run 或按 todo.md D-07 完成迁移",
-        ));
+    if args.dry_run {
+        return Ok(());
     }
-    Ok(())
+    dytes::publish::run::dytes::publish(&config_path)
+        .map_err(|error| DytesError::failed(format!("{error:#}")))
 }
 
 fn run_install(args: InstallArgs) -> Result<()> {

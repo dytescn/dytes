@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PackageLock {
     pub name: String,
+    #[serde(default)]
+    pub uuid: Option<String>,
     pub version: String,
     #[serde(rename = "type")]
     pub pkg_type: String,
@@ -41,12 +43,20 @@ impl DytesLock {
     }
 
     pub fn upsert(&mut self, package: PackageLock) {
-        self.package.retain(|item| item.name != package.name);
+        self.package.retain(|item| {
+            if let Some(uuid) = package.uuid.as_deref() {
+                item.uuid.as_deref() != Some(uuid) && item.name != package.name
+            } else {
+                item.name != package.name
+            }
+        });
         self.package.push(package);
     }
 
-    pub fn find(&self, name: &str) -> Option<&PackageLock> {
-        self.package.iter().find(|item| item.name == name)
+    pub fn find(&self, key: &str) -> Option<&PackageLock> {
+        self.package
+            .iter()
+            .find(|item| item.name == key || item.uuid.as_deref() == Some(key))
     }
 }
 
@@ -60,12 +70,14 @@ mod tests {
         let mut lock = DytesLock::read(dir.path()).unwrap();
         lock.upsert(PackageLock {
             name: "info_lib".into(),
+            uuid: Some("11111111-1111-4111-8111-111111111111".into()),
             version: "0.1.0".into(),
             pkg_type: "sys".into(),
             loader: vec![],
         });
         lock.upsert(PackageLock {
             name: "info_lib".into(),
+            uuid: Some("11111111-1111-4111-8111-111111111111".into()),
             version: "0.2.0".into(),
             pkg_type: "sys".into(),
             loader: vec![],

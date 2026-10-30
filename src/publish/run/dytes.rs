@@ -1,8 +1,10 @@
 use crate::publish::utils::dytes::DytesConfig;
 use crate::publish::utils::loader::{download_from_s3, object_exists, upload_bytes, upload_file};
 use anyhow::{bail, Context, Result};
+use serde_json::Value;
 use std::fs;
 use std::path::Path;
+use uuid::Uuid;
 
 /// 根据 type 获取对应的远程路径前缀
 fn get_remote_prefix(pkg_type: &str, name: &str) -> String {
@@ -46,14 +48,14 @@ fn is_not_found_error(error: &str) -> bool {
 ///
 /// 读取失败时不再静默重建，避免一次网络故障把整个包索引覆盖成空表。
 fn update_packages_json(
+    uuid: &str,
     name: &str,
     version: &str,
-    _pkg_type: &str,
+    pkg_type: &str,
     bucket: &str,
     packages_remote_path: &str,
 ) -> Result<()> {
     use chrono::Utc;
-    use serde_json::Value;
 
     println!(
         "  从 S3 获取 packages.json: {}/{}",
@@ -98,24 +100,40 @@ fn update_packages_json(
         }
     };
 
-    // 更新包版本
+    // 更新包版本：新索引以 uuid 为主键，同时兼容旧 name -> version 形式。
     if let Some(obj) = packages_data.as_object_mut() {
         let packages = obj.entry("packages").or_insert(serde_json::json!({}));
 
-        // 先获取旧版本（不可变借用）
         let old_version = packages
-            .get(name)
-            .and_then(|v| v.as_str())
+            .get(uuid)
+            .and_then(entry_version)
+            .or_else(|| packages.get(name).and_then(entry_version))
+            .or_else(|| {
+                packages
+                    .as_object()
+                    .and_then(|map| map.values().find(|value| value_name(value) == Some(name)))
+                    .and_then(entry_version)
+            })
             .unwrap_or("未找到")
             .to_string();
 
-        // 然后进行可变借用插入新版本
         if let Some(pkg_obj) = packages.as_object_mut() {
+            // 迁移：移除同名旧键（name -> version）或旧 uuid 条目，避免重复。
+            pkg_obj
+                .retain(|key, value| key != name && key != uuid && value_name(value) != Some(name));
             pkg_obj.insert(
-                name.to_string(),
-                serde_json::Value::String(version.to_string()),
+                uuid.to_string(),
+                serde_json::json!({
+                    "name": name,
+                    "version": version,
+                    "type": pkg_type,
+                    "updated_at": Utc::now().to_rfc3339(),
+                }),
             );
-            println!("  包 {} 版本已更新: {} -> {}", name, old_version, version);
+            println!(
+                "  包 {} ({}) 版本已更新: {} -> {}",
+                name, uuid, old_version, version
+            );
         }
 
         // 更新更新时间
@@ -133,6 +151,40 @@ fn update_packages_json(
 
     println!("  packages.json 更新成功");
     Ok(())
+}
+
+/// packages.json 条目版本：兼容旧 `name -> "1.0.0"` 与新 `{version,...}`。
+fn entry_version(value: &Value) -> Option<&str> {
+    value
+        .as_str()
+        .or_else(|| value.get("version").and_then(Value::as_str))
+}
+
+fn value_name(value: &Value) -> Option<&str> {
+    value.get("name").and_then(Value::as_str)
+}
+
+/// 确保 dytes.json 有 uuid：缺失时生成并写回源文件。
+fn ensure_manifest_uuid(json_path: &Path, raw: &str) -> Result<String> {
+    let mut value: Value = serde_json::from_str(raw).with_context(|| "解析 dytes.json 失败")?;
+    if let Some(existing) = value.get("uuid").and_then(Value::as_str) {
+        let trimmed = existing.trim();
+        if !trimmed.is_empty() {
+            let uuid = Uuid::parse_str(trimmed)
+                .with_context(|| format!("dytes.json 的 uuid 非法: {trimmed}"))?;
+            return Ok(uuid.to_string());
+        }
+    }
+
+    let uuid = Uuid::new_v4().to_string();
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("dytes.json 不是 JSON 对象"))?;
+    object.insert("uuid".to_string(), Value::String(uuid.clone()));
+    fs::write(json_path, serde_json::to_string_pretty(&value)?)
+        .with_context(|| format!("写回 uuid 到 {} 失败", json_path.display()))?;
+    println!("  dytes.json 缺少 uuid，已生成并写回: {}", uuid);
+    Ok(uuid)
 }
 
 /// 发布包
@@ -171,6 +223,8 @@ pub fn publish(json_path: &Path) -> Result<()> {
         );
     }
 
+    let uuid = ensure_manifest_uuid(json_path, &content)?;
+
     let platform = crate::publish::utils::platform::current_platform();
     let Some((exports, platform_tag)) =
         crate::publish::utils::platform::select_exports(&config, &platform)
@@ -179,6 +233,7 @@ pub fn publish(json_path: &Path) -> Result<()> {
     };
 
     println!("  名称: {}", name);
+    println!("  UUID: {}", uuid);
     println!("  版本: {}", version);
     println!("  类型: {}", pkg_type);
     println!("  平台: {}", platform);
@@ -270,7 +325,14 @@ pub fn publish(json_path: &Path) -> Result<()> {
 
     // 6. 最后更新 packages.json，把版本指向已经上传完成的文件
     println!("更新 packages.json...");
-    update_packages_json(&name, &version, pkg_type, bucket, &packages_remote_path)?;
+    update_packages_json(
+        &uuid,
+        &name,
+        &version,
+        pkg_type,
+        bucket,
+        &packages_remote_path,
+    )?;
     println!();
 
     Ok(())

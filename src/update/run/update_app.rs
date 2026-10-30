@@ -221,8 +221,14 @@ pub async fn update_app_info(
     }
 
     // 9. 写入锁文件
-    update_package_in_lock(&name, &remote_app_info.version, "app", loader)
-        .context("更新锁文件失败")?;
+    update_package_in_lock(
+        remote_app_info.uuid.as_deref(),
+        &name,
+        &remote_app_info.version,
+        "app",
+        loader,
+    )
+    .context("更新锁文件失败")?;
 
     println!("  应用更新完成: {} v{}", name, remote_app_info.version);
     Ok(())

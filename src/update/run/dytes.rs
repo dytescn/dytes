@@ -58,6 +58,49 @@ fn need_update(name: &str, remote_version: &str) -> bool {
     false
 }
 
+/// 从 packages.json 的 `packages` 对象中取某包的版本。
+///
+/// 兼容两种索引：
+/// - 旧：`"name": "1.0.0"`
+/// - 新：`"<uuid>": {"name": "...", "version": "...", ...}`
+fn package_version(packages: &serde_json::Value, name: &str) -> Option<String> {
+    let map = packages.as_object()?;
+    if let Some(value) = map.get(name) {
+        if let Some(version) = value
+            .as_str()
+            .or_else(|| value.get("version").and_then(|v| v.as_str()))
+        {
+            return Some(version.to_string());
+        }
+    }
+    map.values()
+        .find(|value| value.get("name").and_then(|v| v.as_str()) == Some(name))
+        .and_then(|value| value.get("version").and_then(|v| v.as_str()))
+        .map(str::to_string)
+}
+
+/// 列出 packages.json 中的 `(name, version)`，兼容新旧两种索引。
+fn package_versions(packages: &serde_json::Value) -> Vec<(String, String)> {
+    let Some(map) = packages.as_object() else {
+        return Vec::new();
+    };
+    let mut result: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for (key, value) in map {
+        let name = value
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(key)
+            .to_string();
+        let version = value
+            .as_str()
+            .or_else(|| value.get("version").and_then(|v| v.as_str()))
+            .unwrap_or("?")
+            .to_string();
+        result.insert(name, version);
+    }
+    result.into_iter().collect()
+}
+
 /// 获取线上包的最新版本（读取 <type>/<name>/dytes.json）
 async fn remote_version(pkg_type: &str, name: &str) -> Result<String> {
     let dir = match pkg_type {
@@ -74,12 +117,10 @@ async fn remote_version(pkg_type: &str, name: &str) -> Result<String> {
     let index_path = format!("{}/packages.json", dir);
     if let Ok(text) = crate::update::utils::loader::fetch_text(&index_path).await {
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
-            if let Some(version) = value
-                .get("packages")
-                .and_then(|v| v.get(name))
-                .and_then(|v| v.as_str())
-            {
-                return Ok(version.to_string());
+            if let Some(packages) = value.get("packages") {
+                if let Some(version) = package_version(packages, name) {
+                    return Ok(version);
+                }
             }
         }
     }
@@ -165,9 +206,10 @@ pub async fn discover_packages() -> Result<()> {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
                 if let Some(packages) = value.get("packages").and_then(|v| v.as_object()) {
                     println!("扫描线上包索引: {}", index_path);
-                    for (name, version) in packages {
-                        let version = version.as_str().unwrap_or("?");
-                        match declared.get(name) {
+                    for (name, version) in
+                        package_versions(&serde_json::Value::Object(packages.clone()))
+                    {
+                        match declared.get(&name) {
                             Some(local) => {
                                 println!("  [已声明] {} {}（本地 {}）", name, version, local)
                             }
@@ -298,9 +340,9 @@ pub async fn check_report(sync_online: bool, types: Option<&[String]>) -> Result
 
     let selected = |pkg_type: &str| -> bool {
         match types {
-            Some(list) if !list.is_empty() => list
-                .iter()
-                .any(|item| normalize_pkg_type(item) == pkg_type),
+            Some(list) if !list.is_empty() => {
+                list.iter().any(|item| normalize_pkg_type(item) == pkg_type)
+            }
             _ => true,
         }
     };

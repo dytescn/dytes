@@ -145,7 +145,13 @@ pub async fn update_webs_info(
     }
 
     // 6. 写入锁文件
-    update_package_in_lock(&name, &remote_app_info.version, "web", loader)?;
+    update_package_in_lock(
+        remote_app_info.uuid.as_deref(),
+        &name,
+        &remote_app_info.version,
+        "web",
+        loader,
+    )?;
 
     println!("  Web 资源下载完成: {} v{}", name, remote_app_info.version);
 

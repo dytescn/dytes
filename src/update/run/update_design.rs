@@ -48,6 +48,8 @@ impl DesignKind {
 #[derive(Debug, Clone)]
 pub struct DesignUpdateResult {
     pub name: String,
+    /// 包清单 uuid；旧包可能为空。
+    pub uuid: Option<String>,
     pub version: String,
     /// 安装目录（相对安装根目录）。
     pub path: String,
@@ -139,6 +141,7 @@ pub async fn update_design_info(
                     println!("  已是最新版本 (v{})，跳过下载", local);
                     return Ok(DesignUpdateResult {
                         name,
+                        uuid: remote_info.uuid.clone(),
                         version: remote_info.version.clone(),
                         path: package_dir,
                         files,
@@ -194,7 +197,13 @@ pub async fn update_design_info(
     for (source, dest) in exports {
         loader.push(vec![source.clone(), dest.clone()]);
     }
-    update_package_in_lock(&name, &remote_info.version, remote_dir, loader)?;
+    update_package_in_lock(
+        remote_info.uuid.as_deref(),
+        &name,
+        &remote_info.version,
+        remote_dir,
+        loader,
+    )?;
 
     println!(
         "  设计{}更新完成: {} v{}",
@@ -205,6 +214,7 @@ pub async fn update_design_info(
 
     Ok(DesignUpdateResult {
         name,
+        uuid: remote_info.uuid.clone(),
         version: remote_info.version,
         path: package_dir,
         files,

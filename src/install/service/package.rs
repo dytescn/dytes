@@ -27,6 +27,7 @@ pub fn install_design(
     Ok(json!({
         "type": kind.as_str(),
         "name": result.name,
+        "uuid": result.uuid,
         "version": result.version,
         "path": result.path,
         "files": result.files,

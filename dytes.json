@@ -1,6 +1,7 @@
 {
   "name": "dytes",
-  "version": "0.1.6",
+  "uuid": "e73fdb52-ae2f-49d6-9bac-a77e1952b229",
+  "version": "0.1.7",
   "description": "Piksel package installer, updater and publisher",
   "keywords": [
     "piksel",

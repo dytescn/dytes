@@ -1,9 +1,11 @@
 use crate::shared::config::PackageType;
 use serde_json::{json, Value};
+use uuid::Uuid;
 
 pub fn init_manifest(pkg_type: PackageType, name: &str, version: &str) -> Value {
     let base = json!({
         "name": name,
+        "uuid": Uuid::new_v4().to_string(),
         "version": version,
         "description": format!("{name} package"),
         "author": "funxdata",
@@ -85,6 +87,7 @@ mod tests {
             let config: DytesConfig = serde_json::from_value(value).unwrap();
             config.validate().unwrap();
             assert_eq!(config.package_type().unwrap(), pkg_type);
+            assert!(config.uuid.as_deref().is_some_and(|uuid| !uuid.is_empty()));
         }
     }
 }

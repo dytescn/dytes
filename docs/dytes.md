@@ -111,6 +111,7 @@ dytes <command> [options]
 ```json
 {
   "name": "piksel",
+  "uuid": "8b2cd615-eacf-43fb-a2c9-d6f0a8195946",
   "version": "1.1.13",
   "type": "app",
   "exports": {},
@@ -127,7 +128,8 @@ dytes <command> [options]
 
 约束：
 
-- `name`、`version`、`type` 必填；
+- `name`、`uuid`、`version`、`type` 必填；`uuid` 由 `dytes init` 生成，旧清单首次 `publish` 时自动补写；
+- `uuid` 是包的唯一标识；`name` 只用于远程路径、安装目录和用户可读名称；
 - `exports` 与 `platform-exports` 至少一个非空；
 - `init` 脚本必须存在于包内；
 - 依赖版本使用 semver；支持 `^` / `~`；
@@ -135,7 +137,7 @@ dytes <command> [options]
 
 ### 4.3 锁文件
 
-`dytes.lock` 记录已安装包与版本；更新、安装、发布前都必须与 `dytes.json` 校验。
+`dytes.lock` 记录已安装包的 `uuid`、`name`、`type`、`version` 与 `loader`；新记录以 `uuid` 为主键，旧锁文件没有 `uuid` 时按 `name` 读取。
 缺失时按首次安装处理。
 
 ### 4.4 S3 凭证与配置
@@ -221,7 +223,7 @@ dytes install model <name>[@<version>]
 ### 5.4 插件 / 其他包安装流程
 
 1. 校验类型、名称、版本；
-2. 读取对应 `packages.json`；
+2. 读取对应 `packages.json`（新索引按 `uuid` 存放，旧 `name -> version` 仍兼容）；
 3. 下载 `exports` / `platform-exports`；
 4. 写入目标目录：
    - `design_plugins` → `plugins/<name>/`；
@@ -321,13 +323,13 @@ dytes publish [--dir <path>] [--dry-run] [--platform <platform>] [--force]
 
 ### 7.3 流程
 
-1. 读取并校验 `dytes.json`；
+1. 读取并校验 `dytes.json`；缺少 `uuid` 时生成并写回，`uuid` 非法则中止；
 2. 选择 `exports` 或当前平台 `platform-exports`；
 3. 上传每个导出文件到：
    `./<type>/<name>/<version>/[<platform>/]<file>`；
 4. 上传 `dytes.json`；
-5. 所有文件成功后再更新 `<type>/packages.json`；
-6. 输出上传清单与最终版本。
+5. 所有文件成功后再更新 `<type>/packages.json`，新条目为 `<uuid>: {name, version, type, updated_at}`；
+6. 输出上传清单、包 uuid 与最终版本。
 
 ### 7.4 要求
 
@@ -375,6 +377,7 @@ dytes init [--type <type>] [--name <name>] [--version <ver>] [--dir <path>] [--f
 ### 8.4 要求
 
 - 默认 `name` 取目录名，默认 `version` 为 `0.1.0`；
+- 自动生成并写入 `uuid`；
 - `dytes.json` 已存在时默认拒绝覆盖，`--force` 才重写；
 - 生成前校验 `name` / `type` / `version`；
 - 输出生成路径与后续命令建议：
@@ -432,7 +435,7 @@ dytes init [--type <type>] [--name <name>] [--version <ver>] [--dir <path>] [--f
 | 日志 | 控制台 + 文件；`--json` 提供结构化结果 |
 | 性能 | 更新只下载变化文件；大包显示进度 |
 | 可测试性 | 业务逻辑与 CLI / GUI 解耦，核心模块可单测 |
-| 兼容性 | 旧 `dytes.json` / `dytes.lock` / `packages.json` 不需要迁移 |
+| 兼容性 | 旧 `dytes.json` 首次 `publish` 自动补 `uuid`；旧 `dytes.lock` / `packages.json` 按 `name` 双读 |
 
 ---
 

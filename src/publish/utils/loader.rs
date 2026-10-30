@@ -182,6 +182,71 @@ pub fn object_exists(bucket_name: &str, object_name: &str) -> Result<bool, Strin
     })
 }
 
+/// 列出 S3 指定前缀下的对象 key。
+///
+/// 又拍云对不存在的 key 的 HEAD/GET 可能返回 403，发布索引时用 ListObjectsV2
+/// 判断 `packages.json` 是否真实存在，避免误覆盖已有索引。
+pub fn list_keys(bucket_name: &str, prefix: &str) -> Result<Vec<String>, String> {
+    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("创建运行时失败: {}", e))?;
+
+    rt.block_on(async {
+        let credentials = Credentials::new(
+            s3_settings().access_key.unwrap_or_default(),
+            s3_settings().secret_key.unwrap_or_default(),
+            None,
+            None,
+            "custom",
+        );
+
+        let config = aws_config::defaults(BehaviorVersion::latest())
+            .endpoint_url(s3_settings().endpoint)
+            .region(Region::new("us-east-1"))
+            .credentials_provider(credentials)
+            .load()
+            .await;
+
+        let config = Config::from(&config)
+            .to_builder()
+            .force_path_style(true)
+            .build();
+
+        let client = Client::from_conf(config);
+        let mut keys = Vec::new();
+        let mut continuation: Option<String> = None;
+
+        loop {
+            let mut request = client.list_objects_v2().bucket(bucket_name).prefix(prefix);
+            if let Some(token) = &continuation {
+                request = request.continuation_token(token.clone());
+            }
+
+            let response = request
+                .send()
+                .await
+                .map_err(|e| format!("ListObjectsV2 {} 失败: {}", prefix, e))?;
+
+            for object in response.contents() {
+                if let Some(key) = object.key() {
+                    keys.push(key.to_string());
+                }
+            }
+
+            if response.is_truncated().unwrap_or(false) {
+                continuation = response
+                    .next_continuation_token()
+                    .map(|token| token.to_string());
+                if continuation.is_none() {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        Ok(keys)
+    })
+}
+
 /// 从 S3 下载文件内容
 pub fn download_from_s3(bucket_name: &str, object_name: &str) -> Result<String, String> {
     let rt = match tokio::runtime::Runtime::new() {

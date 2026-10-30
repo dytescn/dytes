@@ -1,5 +1,7 @@
 use crate::publish::utils::dytes::DytesConfig;
-use crate::publish::utils::loader::{download_from_s3, object_exists, upload_bytes, upload_file};
+use crate::publish::utils::loader::{
+    download_from_s3, list_keys, object_exists, upload_bytes, upload_file,
+};
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::fs;
@@ -73,26 +75,33 @@ fn update_packages_json(
             })
         }
         Err(e) => {
-            match crate::publish::utils::loader::object_exists(bucket, packages_remote_path) {
-                Ok(false) => {
-                    println!("  远程 packages.json 不存在，创建新的");
-                    serde_json::json!({
-                        "packages": {},
-                        "updated_at": Utc::now().to_rfc3339()
-                    })
-                }
-                Ok(true) => {
+            // 又拍云对不存在的 key 可能返回 403（HEAD/GET 均不可靠），
+            // 用 ListObjectsV2 判断索引是否真的不存在，避免覆盖已有 packages.json。
+            let prefix = packages_remote_path
+                .rsplit_once('/')
+                .map(|(parent, _)| format!("{parent}/"))
+                .unwrap_or_default();
+            match list_keys(bucket, &prefix) {
+                Ok(keys) if keys.iter().any(|key| key == packages_remote_path) => {
                     bail!(
                         "读取远程 {} 失败（对象存在）: {}。为避免覆盖现有包索引，发布已中止。",
                         packages_remote_path,
                         e
                     );
                 }
-                Err(head_err) => {
+                Ok(_) => {
+                    println!("  远程 packages.json 不存在，创建新的");
+                    serde_json::json!({
+                        "packages": {},
+                        "updated_at": Utc::now().to_rfc3339()
+                    })
+                }
+                Err(list_err) => {
                     bail!(
-                        "检查远程 {} 失败: {}（原读取错误: {}）。发布已中止。",
+                        "读取远程 {} 失败，且无法列出 {}: {}（原读取错误: {}）。发布已中止。",
                         packages_remote_path,
-                        head_err,
+                        prefix,
+                        list_err,
                         e
                     );
                 }

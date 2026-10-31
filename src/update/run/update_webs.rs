@@ -1,4 +1,5 @@
 use super::{update_design, update_os, update_sys};
+use crate::shared::checksum::verify_download;
 use crate::update::utils::dytes::DytesConfig;
 use crate::update::utils::env::get_app_dir;
 use crate::update::utils::loader::{download_file, fetch_text};
@@ -118,6 +119,11 @@ pub async fn update_webs_info(
             anyhow::bail!("下载 Web 资源 {} 失败", dest_filename);
         }
 
+        verify_download(
+            Path::new(&dest_path),
+            dest_filename,
+            &remote_app_info.checksums,
+        )?;
         println!("  下载完成: {}", dest_filename);
     }
 
@@ -136,6 +142,11 @@ pub async fn update_webs_info(
         if !download_file(&s3_path, &web_dir).await {
             anyhow::bail!("下载初始化脚本 {} 失败", init_script);
         }
+        verify_download(
+            Path::new(&dest_path),
+            filename.as_ref(),
+            &remote_app_info.checksums,
+        )?;
     }
 
     // 5. 构建 loader 数据

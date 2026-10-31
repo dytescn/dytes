@@ -1,3 +1,4 @@
+use crate::shared::checksum::verify_download;
 use crate::update::utils::dytes::DytesConfig;
 use crate::update::utils::env::get_app_dir;
 use crate::update::utils::loader::{download_file, fetch_text};
@@ -167,6 +168,11 @@ pub async fn update_sys_info(
             println!("  重命名: {} -> {}", remote_filename, dest_filename);
         }
 
+        verify_download(
+            Path::new(&dest_path),
+            dest_filename,
+            &remote_app_info.checksums,
+        )?;
         println!("  下载完成: {}", dest_filename);
     }
 

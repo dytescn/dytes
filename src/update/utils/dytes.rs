@@ -1,3 +1,4 @@
+use crate::shared::checksum::FileChecksum;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -48,6 +49,8 @@ pub struct DytesConfig {
     pub init: Vec<String>,
     #[serde(default = "default_auto_update", rename = "auto_update")]
     pub auto_update: bool,
+    #[serde(default)]
+    pub checksums: HashMap<String, FileChecksum>,
 }
 
 fn default_auto_update() -> bool {

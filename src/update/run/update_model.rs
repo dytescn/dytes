@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use std::fs;
 
+use crate::shared::checksum::verify_download;
 use crate::update::utils::dytes::DytesConfig;
 use crate::update::utils::env::get_app_dir;
 use crate::update::utils::loader::{download_file, fetch_text};
@@ -71,6 +72,11 @@ pub async fn update_model_info(name: String, declared_version: String) -> Result
         if !download_file(&s3_file, &model_dir).await {
             anyhow::bail!("下载模型 {}/{} 失败", name, dest_filename);
         }
+        verify_download(
+            std::path::Path::new(&format!("{}/{}", model_dir, dest_filename)),
+            dest_filename,
+            &remote_info.checksums,
+        )?;
         loader.push(vec![source_path.clone(), dest_filename.clone()]);
     }
 

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use std::fs;
 
+use crate::shared::checksum::verify_download;
 use crate::update::utils::dytes::DytesConfig;
 use crate::update::utils::env::get_app_dir;
 use crate::update::utils::loader::{download_file, fetch_text};
@@ -167,6 +168,12 @@ pub async fn update_design_info(
         if !download_file(&s3_file, &package_dir).await {
             anyhow::bail!("下载 {}/{} 失败", name, dest_filename);
         }
+
+        verify_download(
+            std::path::Path::new(&format!("{}/{}", package_dir, dest_filename)),
+            dest_filename,
+            &remote_info.checksums,
+        )?;
     }
 
     // 5. 保存云端清单，供插件管理库读取 use_ai / targets，也供设计软件读取入口

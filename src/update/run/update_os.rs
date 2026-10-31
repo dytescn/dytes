@@ -1,3 +1,4 @@
+use crate::shared::checksum::verify_download;
 use crate::update::utils::dytes::DytesConfig;
 use crate::update::utils::env::get_app_dir;
 use crate::update::utils::loader::{download_file, fetch_text};
@@ -71,6 +72,11 @@ pub async fn update_os_info(name: String, declared_version: String) -> Result<()
             if !download_file(&s3_path, &tmp_dir).await {
                 anyhow::bail!("下载 {} 失败", dest_filename);
             }
+            verify_download(
+                std::path::Path::new(&format!("{}/{}", tmp_dir, dest_filename)),
+                dest_filename,
+                &remote_app_info.checksums,
+            )?;
             downloaded_file = Some(format!("{}/{}", tmp_dir, dest_filename));
         }
 
@@ -115,6 +121,11 @@ pub async fn update_os_info(name: String, declared_version: String) -> Result<()
             anyhow::bail!("下载 {} 失败", dest_filename);
         }
 
+        verify_download(
+            std::path::Path::new(&dest_path),
+            dest_filename,
+            &remote_app_info.checksums,
+        )?;
         println!("  下载完成: {}", dest_filename);
     }
 

@@ -1,5 +1,6 @@
 use clap::{Args, Parser, Subcommand};
 use dytes::install::service::package as install_package;
+use dytes::shared::checksum::digest_file;
 use dytes::shared::config::{DytesConfig, PackageType};
 use dytes::shared::credentials::{mask, ToolConfig};
 use dytes::shared::error::{DytesError, Result};
@@ -350,7 +351,14 @@ fn run_publish(args: PublishArgs) -> Result<()> {
         plan.push(json!({
             "source": source,
             "remote": format!("{base}{dest}"),
-            "exists": dir.join(source).exists(),
+            "exists": dir.join(&source).exists(),
+            "checksum": if dir.join(&source).exists() {
+                Some(digest_file(&dir.join(&source)).map_err(|error| {
+                    DytesError::failed(format!("计算校验失败: {error:#}"))
+                })?)
+            } else {
+                None
+            },
         }));
     }
     let index = package::packages_index(pkg_type);
@@ -396,6 +404,13 @@ fn run_publish(args: PublishArgs) -> Result<()> {
                     "  (缺失)"
                 }
             );
+            if let Some(sha256) = item["checksum"]["sha256"].as_str() {
+                println!(
+                    "    sha256={} sampled={}",
+                    sha256,
+                    item["checksum"]["sampled"].as_bool().unwrap_or(false)
+                );
+            }
         }
     }
     if args.dry_run {

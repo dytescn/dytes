@@ -2,8 +2,10 @@ use crate::publish::utils::dytes::DytesConfig;
 use crate::publish::utils::loader::{
     download_from_s3, list_keys, object_exists, upload_bytes, upload_file,
 };
+use crate::shared::checksum::{digest_file, FileChecksum};
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use uuid::Uuid;
@@ -233,6 +235,10 @@ pub fn publish(json_path: &Path) -> Result<()> {
     }
 
     let uuid = ensure_manifest_uuid(json_path, &content)?;
+    let manifest_text = fs::read_to_string(json_path)
+        .with_context(|| format!("读取文件失败: {}", json_path.display()))?;
+    let mut manifest: Value =
+        serde_json::from_str(&manifest_text).with_context(|| "解析 dytes.json 失败")?;
 
     let platform = crate::publish::utils::platform::current_platform();
     let Some((exports, platform_tag)) =
@@ -266,6 +272,7 @@ pub fn publish(json_path: &Path) -> Result<()> {
 
     let mut success_count = 0;
     let mut fail_count = 0;
+    let mut checksums: HashMap<String, FileChecksum> = HashMap::new();
 
     if exports.is_empty() {
         println!("没有导出文件，跳过文件上传");
@@ -290,6 +297,7 @@ pub fn publish(json_path: &Path) -> Result<()> {
 
             println!("  上传: {} -> {}", full_local_path.display(), object_name);
 
+            let mut skipped = false;
             let is_large_file = fs::metadata(&full_local_path)
                 .map(|m| m.len() > 100 * 1024 * 1024)
                 .unwrap_or(false);
@@ -297,19 +305,31 @@ pub fn publish(json_path: &Path) -> Result<()> {
                 match object_exists(bucket, &object_name) {
                     Ok(true) => {
                         println!("   大文件对象已存在，跳过重复上传");
-                        success_count += 1;
-                        continue;
+                        skipped = true;
                     }
                     Ok(false) => {}
                     Err(e) => println!("   检查对象是否存在失败，继续上传: {}", e),
                 }
             }
 
-            if upload_file(full_local_path.to_str().unwrap(), bucket, &object_name) {
-                success_count += 1;
-            } else {
+            if !skipped && !upload_file(full_local_path.to_str().unwrap(), bucket, &object_name) {
                 fail_count += 1;
+                continue;
             }
+
+            success_count += 1;
+            let checksum = digest_file(&full_local_path)
+                .with_context(|| format!("计算校验失败: {}", full_local_path.display()))?;
+            if checksum.sampled {
+                println!(
+                    "   校验: SHA-256 {} (抽样首尾 {} MiB)",
+                    checksum.sha256,
+                    checksum.sample_bytes / 1024 / 1024
+                );
+            } else {
+                println!("   校验: SHA-256 {}", checksum.sha256);
+            }
+            checksums.insert(remote_name_clean.to_string(), checksum);
         }
 
         println!();
@@ -323,13 +343,18 @@ pub fn publish(json_path: &Path) -> Result<()> {
         }
     }
 
-    // 5. 上传 dytes.json
+    // 5. 上传带 checksums 的 dytes.json
     println!("上传 dytes.json...");
     let dytes_remote_path = format!("{}/dytes.json", remote_prefix);
-    if !upload_file(json_path.to_str().unwrap(), bucket, &dytes_remote_path) {
+    let object = manifest
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("dytes.json 不是 JSON 对象"))?;
+    object.insert("checksums".to_string(), serde_json::to_value(&checksums)?);
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
+    if !upload_bytes(&manifest_bytes, bucket, &dytes_remote_path) {
         bail!("dytes.json 上传失败，已中止发布");
     }
-    println!("  dytes.json 上传成功");
+    println!("  dytes.json 上传成功（{} 个文件校验）", checksums.len());
     println!();
 
     // 6. 最后更新 packages.json，把版本指向已经上传完成的文件

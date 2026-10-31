@@ -1,3 +1,4 @@
+use crate::shared::checksum::FileChecksum;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -37,6 +38,8 @@ pub struct DytesConfig {
     pub platform_exports: HashMap<String, HashMap<String, String>>,
     #[serde(default)]
     pub init: Vec<String>,
+    #[serde(default)]
+    pub checksums: HashMap<String, FileChecksum>,
 }
 
 /// 依赖类型

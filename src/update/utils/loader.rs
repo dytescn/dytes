@@ -7,6 +7,7 @@ use aws_sdk_s3::Client;
 use futures_util::StreamExt;
 use reqwest;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs::{create_dir_all, File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -27,6 +28,21 @@ fn is_s3_path(path: &str) -> bool {
 
 const FETCH_RETRIES: u32 = 3;
 
+/// 启动更新模式：只做一次尝试，避免网络/凭证异常时在启动链路上反复重试。
+static STARTUP_MODE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_startup_mode(enabled: bool) {
+    STARTUP_MODE.store(enabled, Ordering::Relaxed);
+}
+
+fn startup_mode() -> bool {
+    STARTUP_MODE.load(Ordering::Relaxed)
+}
+
+fn fetch_retries() -> u32 {
+    if startup_mode() { 1 } else { FETCH_RETRIES }
+}
+
 fn s3_settings() -> ResolvedS3 {
     effective_s3()
 }
@@ -41,8 +57,9 @@ fn bucket() -> String {
 /// 先落盘到临时目录再读出来。
 pub async fn fetch_text(path_or_url: &str) -> Result<String> {
     let mut last_error = String::new();
+    let retries = fetch_retries();
 
-    for attempt in 1..=FETCH_RETRIES {
+    for attempt in 1..=retries {
         let result = if is_s3_path(path_or_url) {
             fetch_s3_text(path_or_url).await
         } else {
@@ -53,10 +70,10 @@ pub async fn fetch_text(path_or_url: &str) -> Result<String> {
             Ok(text) => return Ok(text),
             Err(e) => {
                 last_error = format!("{}", e);
-                if attempt < FETCH_RETRIES {
+                if attempt < retries {
                     println!(
                         "  读取失败 (尝试 {}/{}): {}，稍后重试...",
-                        attempt, FETCH_RETRIES, e
+                        attempt, retries, e
                     );
                     sleep(Duration::from_secs(attempt as u64)).await;
                 }
@@ -170,10 +187,11 @@ pub async fn download_file(url_or_path: &str, output_dir: &str) -> bool {
     let is_s3 = is_s3_path(url_or_path);
 
     const MAX_RETRIES: u32 = 10;
+    let max_retries = if startup_mode() { 2 } else { MAX_RETRIES };
     let mut attempt = 0;
     let mut last_error = String::new();
 
-    while attempt < MAX_RETRIES {
+    while attempt < max_retries {
         if attempt > 0 {
             let delay = Duration::from_secs(2_u64.pow(attempt));
             println!("  等待 {} 秒后重试...", delay.as_secs());

@@ -511,6 +511,12 @@ fn run_update_inner(args: UpdateArgs) -> Result<()> {
         return Ok(());
     }
 
+    if args.startup {
+        // 启动链路只允许快速失败：不重试，并对整个更新设置总超时，
+        // 避免网络或凭证异常时阻塞宿主启动。
+        dytes::update::utils::loader::set_startup_mode(true);
+    }
+
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|e| DytesError::failed(format!("创建异步运行时失败: {e}")))?;
     let sync_online = !args.offline;
@@ -546,7 +552,24 @@ fn run_update_inner(args: UpdateArgs) -> Result<()> {
             return Ok(());
         }
 
-        let result = dytes::update::run::dytes::init_dytes_with_options(None, sync_online).await;
+        let update = dytes::update::run::dytes::init_dytes_with_options(None, sync_online);
+        let result = if args.startup {
+            const STARTUP_TIMEOUT_SECS: u64 = 8;
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(STARTUP_TIMEOUT_SECS),
+                update,
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => {
+                    println!("启动更新超时（{STARTUP_TIMEOUT_SECS}s），本次跳过");
+                    return Ok(());
+                }
+            }
+        } else {
+            update.await
+        };
         if args.startup && result.is_ok() {
             dytes::update::run::dytes::mark_startup_checked();
         }

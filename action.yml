@@ -1,0 +1,66 @@
+name: Dytes
+description: Install, update and publish Piksel packages with the dytes CLI
+author: funxdata
+branding:
+  icon: package
+  color: blue
+
+inputs:
+  command:
+    description: "dytes subcommand to run: publish, update, install, init or config"
+    required: false
+    default: publish
+  args:
+    description: "Extra arguments passed to the subcommand, e.g. --force or --dry-run"
+    required: false
+    default: ""
+  dir:
+    description: "Package directory (relative to the workspace)"
+    required: false
+    default: "."
+  version:
+    description: "dytes release version to download"
+    required: false
+    default: "0.1.9"
+
+runs:
+  using: composite
+  steps:
+    - name: Download dytes
+      shell: bash
+      env:
+        DYTES_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        case "${{ runner.os }}" in
+          Windows) asset="dytes-windows.exe" ;;
+          Linux)   asset="dytes-linux" ;;
+          macOS)   asset="dytes-macos" ;;
+          *) echo "unsupported runner: ${{ runner.os }}" >&2; exit 1 ;;
+        esac
+        url="https://github.com/dytescn/dytes/releases/download/v${DYTES_VERSION}/${asset}"
+        bin_dir="${RUNNER_TEMP}/dytes-bin"
+        mkdir -p "${bin_dir}"
+        curl -fsSL "${url}" -o "${bin_dir}/dytes"
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          mv "${bin_dir}/dytes" "${bin_dir}/dytes.exe"
+        fi
+        chmod +x "${bin_dir}/dytes" 2>/dev/null || true
+        chmod +x "${bin_dir}/dytes.exe" 2>/dev/null || true
+        echo "${bin_dir}" >> "${GITHUB_PATH}"
+        "${bin_dir}/dytes" --version || "${bin_dir}/dytes.exe" --version
+
+    - name: Run dytes
+      shell: bash
+      env:
+        DYTES_COMMAND: ${{ inputs.command }}
+        DYTES_ARGS: ${{ inputs.args }}
+        DYTES_DIR: ${{ inputs.dir }}
+      run: |
+        set -euo pipefail
+        cd "${DYTES_DIR}"
+        extra=()
+        if [ -n "${DYTES_ARGS}" ]; then
+          read -r -a extra <<< "${DYTES_ARGS}"
+        fi
+        dytes "${DYTES_COMMAND}" "${extra[@]}"

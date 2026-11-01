@@ -32,6 +32,18 @@
 | `design_soft` | `apps/<name>/` | `design_soft/` |
 | `model` | `models/` | `models/` |
 
+## GitHub Action
+
+仓库根目录提供 composite Action，可在其它仓库的 workflow 中直接发布包：
+
+```yaml
+      - uses: dytescn/dytes@v0.1.9
+        with:
+          command: publish
+```
+
+详见 [docs/action.md](docs/action.md)。
+
 ## 快速开始
 
 ```bash

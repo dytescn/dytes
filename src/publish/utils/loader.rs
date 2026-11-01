@@ -302,56 +302,29 @@ pub fn download_from_s3(bucket_name: &str, object_name: &str) -> Result<String, 
     })
 }
 
-/// 执行 S3 上传
+/// 执行 S3 上传（内存内容）。
+///
+/// 先写入临时文件，再复用 `upload_path_to_s3` 的文件上传路径。
+/// 又拍云对内存 body 的签名（aws-chunked）会返回 `ErrInvalidAccessKeyID`，
+/// 文件 body 的普通签名可正常上传。
 fn upload_to_s3(file_content: &[u8], bucket_name: &str, object_name: &str) -> bool {
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("  创建运行时失败: {}", e);
-            return false;
-        }
-    };
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = std::env::temp_dir().join(format!(
+        "dytes-upload-{}-{}.tmp",
+        std::process::id(),
+        nonce
+    ));
+    if let Err(e) = fs::write(&tmp, file_content) {
+        eprintln!("  S3上传失败（写临时文件）: {}", e);
+        return false;
+    }
 
-    rt.block_on(async {
-        let credentials = Credentials::new(
-            s3_settings().access_key.unwrap_or_default(),
-            s3_settings().secret_key.unwrap_or_default(),
-            None,
-            None,
-            "custom",
-        );
-
-        let config = aws_config::defaults(BehaviorVersion::latest())
-            .endpoint_url(s3_settings().endpoint)
-            .region(Region::new("us-east-1"))
-            .credentials_provider(credentials)
-            .load()
-            .await;
-
-        let config = Config::from(&config)
-            .to_builder()
-            .force_path_style(true)
-            .build();
-
-        let client = Client::from_conf(config);
-
-        let result = client
-            .put_object()
-            .bucket(bucket_name)
-            .key(object_name)
-            .body(ByteStream::from(file_content.to_vec()))
-            .acl(aws_sdk_s3::types::ObjectCannedAcl::PublicRead)
-            .send()
-            .await;
-
-        match result {
-            Ok(_) => true,
-            Err(e) => {
-                eprintln!("  S3上传失败: {}", e);
-                false
-            }
-        }
-    })
+    let ok = upload_path_to_s3(tmp.to_string_lossy().as_ref(), bucket_name, object_name);
+    let _ = fs::remove_file(&tmp);
+    ok
 }
 
 async fn upload_multipart(

@@ -416,7 +416,7 @@ fn run_publish(args: PublishArgs) -> Result<()> {
     if args.dry_run {
         return Ok(());
     }
-    dytes::publish::run::dytes::publish(&config_path)
+    dytes::publish::run::dytes::publish(&config_path, args.force)
         .map_err(|error| DytesError::failed(format!("{error:#}")))
 }
 

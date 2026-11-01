@@ -48,6 +48,47 @@ fn is_not_found_error(error: &str) -> bool {
         || lower.contains("no such key")
 }
 
+/// 读取索引失败后的处理计划。
+#[derive(Debug, PartialEq, Eq)]
+enum IndexPlan {
+    /// 创建新的 packages.json。
+    CreateNew,
+    /// 中止发布，附带原因。
+    Abort(String),
+}
+
+/// 读取 `packages.json` 失败时，决定是创建新索引还是中止。
+///
+/// - 对象确实不存在（NoSuchKey 等）→ 创建；
+/// - 列举成功且索引存在 → 中止，避免覆盖；
+/// - 列举失败：`force` 时创建（显式承担风险），否则中止并提示配置读取权限。
+fn plan_after_read_error(
+    force: bool,
+    read_error: &str,
+    listed: Result<Vec<String>, String>,
+    packages_remote_path: &str,
+    prefix: &str,
+) -> IndexPlan {
+    if is_not_found_error(read_error) {
+        return IndexPlan::CreateNew;
+    }
+
+    match listed {
+        Ok(keys) if keys.iter().any(|key| key == packages_remote_path) => IndexPlan::Abort(format!(
+            "读取远程 {} 失败（对象存在）: {}。为避免覆盖现有包索引，发布已中止。",
+            packages_remote_path, read_error
+        )),
+        Ok(_) => IndexPlan::CreateNew,
+        Err(_list_err) if force => IndexPlan::CreateNew,
+        Err(list_err) => IndexPlan::Abort(format!(
+            "读取远程 {} 失败，且无法列出 {}: {}（原读取错误: {}）。\
+             若凭证缺少读取/列举权限，请配置 s3.access_key / s3.secret_key；\
+             或使用 --force 创建新索引（可能覆盖其它包条目）。发布已中止。",
+            packages_remote_path, prefix, list_err, read_error
+        )),
+    }
+}
+
 /// 更新 packages.json
 ///
 /// 读取失败时不再静默重建，避免一次网络故障把整个包索引覆盖成空表。
@@ -58,6 +99,7 @@ fn update_packages_json(
     pkg_type: &str,
     bucket: &str,
     packages_remote_path: &str,
+    force: bool,
 ) -> Result<()> {
     use chrono::Utc;
 
@@ -69,13 +111,6 @@ fn update_packages_json(
     let mut packages_data: Value = match download_from_s3(bucket, packages_remote_path) {
         Ok(text) => serde_json::from_str(&text)
             .with_context(|| format!("解析远程 {} 失败，发布已中止", packages_remote_path))?,
-        Err(e) if is_not_found_error(&e) => {
-            println!("  远程 packages.json 不存在，创建新的");
-            serde_json::json!({
-                "packages": {},
-                "updated_at": Utc::now().to_rfc3339()
-            })
-        }
         Err(e) => {
             // 又拍云对不存在的 key 可能返回 403（HEAD/GET 均不可靠），
             // 用 ListObjectsV2 判断索引是否真的不存在，避免覆盖已有 packages.json。
@@ -83,30 +118,20 @@ fn update_packages_json(
                 .rsplit_once('/')
                 .map(|(parent, _)| format!("{parent}/"))
                 .unwrap_or_default();
-            match list_keys(bucket, &prefix) {
-                Ok(keys) if keys.iter().any(|key| key == packages_remote_path) => {
-                    bail!(
-                        "读取远程 {} 失败（对象存在）: {}。为避免覆盖现有包索引，发布已中止。",
-                        packages_remote_path,
-                        e
-                    );
-                }
-                Ok(_) => {
-                    println!("  远程 packages.json 不存在，创建新的");
+            let listed = list_keys(bucket, &prefix);
+            match plan_after_read_error(force, &e, listed, packages_remote_path, &prefix) {
+                IndexPlan::CreateNew => {
+                    if force {
+                        println!("  无法读取远程索引，已按 --force 创建新的 packages.json");
+                    } else {
+                        println!("  远程 packages.json 不存在，创建新的");
+                    }
                     serde_json::json!({
                         "packages": {},
                         "updated_at": Utc::now().to_rfc3339()
                     })
                 }
-                Err(list_err) => {
-                    bail!(
-                        "读取远程 {} 失败，且无法列出 {}: {}（原读取错误: {}）。发布已中止。",
-                        packages_remote_path,
-                        prefix,
-                        list_err,
-                        e
-                    );
-                }
+                IndexPlan::Abort(reason) => bail!("{}", reason),
             }
         }
     };
@@ -203,7 +228,7 @@ fn ensure_manifest_uuid(json_path: &Path, raw: &str) -> Result<String> {
 /// 发布顺序：导出文件 -> dytes.json -> packages.json。
 /// 只有所有文件都上传成功后，才把新版本写进 packages.json，
 /// 避免客户端在文件尚未上传完成时看到新版本。
-pub fn publish(json_path: &Path) -> Result<()> {
+pub fn publish(json_path: &Path, force: bool) -> Result<()> {
     println!("读取配置文件...");
 
     // 1. 读取 dytes.json
@@ -366,6 +391,7 @@ pub fn publish(json_path: &Path) -> Result<()> {
         pkg_type,
         bucket,
         &packages_remote_path,
+        force,
     )?;
     println!();
 
@@ -374,7 +400,89 @@ pub fn publish(json_path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{get_packages_remote_path, get_remote_prefix};
+    use super::{get_packages_remote_path, get_remote_prefix, plan_after_read_error, IndexPlan};
+
+    const INDEX: &str = "system/packages.json";
+
+    #[test]
+    fn read_error_with_missing_object_creates_index() {
+        // NoSuchKey 明确表示对象不存在。
+        let plan = plan_after_read_error(
+            false,
+            "NoSuchKey: 对象不存在",
+            Err("list failed".into()),
+            INDEX,
+            "system/",
+        );
+        assert_eq!(plan, IndexPlan::CreateNew);
+    }
+
+    #[test]
+    fn read_error_with_existing_index_aborts() {
+        let plan = plan_after_read_error(
+            false,
+            "service error",
+            Ok(vec![INDEX.to_string()]),
+            INDEX,
+            "system/",
+        );
+        assert!(matches!(plan, IndexPlan::Abort(_)));
+    }
+
+    #[test]
+    fn read_error_with_list_success_but_no_index_creates() {
+        let plan = plan_after_read_error(
+            false,
+            "service error",
+            Ok(vec!["system/other/dytes.json".to_string()]),
+            INDEX,
+            "system/",
+        );
+        assert_eq!(plan, IndexPlan::CreateNew);
+    }
+
+    #[test]
+    fn list_failure_without_force_aborts_with_hint() {
+        let plan = plan_after_read_error(
+            false,
+            "service error",
+            Err("ListObjectsV2 system/ 失败: service error".into()),
+            INDEX,
+            "system/",
+        );
+        match plan {
+            IndexPlan::Abort(reason) => {
+                assert!(reason.contains("s3.access_key"));
+                assert!(reason.contains("--force"));
+            }
+            other => panic!("应中止，实际: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn list_failure_with_force_creates_index() {
+        let plan = plan_after_read_error(
+            true,
+            "service error",
+            Err("ListObjectsV2 system/ 失败: service error".into()),
+            INDEX,
+            "system/",
+        );
+        assert_eq!(plan, IndexPlan::CreateNew);
+    }
+
+    #[test]
+    fn existing_index_still_aborts_under_force() {
+        // 即使 --force，只要确认索引存在，也不覆盖。
+        let plan = plan_after_read_error(
+            true,
+            "service error",
+            Ok(vec![INDEX.to_string()]),
+            INDEX,
+            "system/",
+        );
+        assert!(matches!(plan, IndexPlan::Abort(_)));
+    }
 
     #[test]
     fn design_plugins_paths() {

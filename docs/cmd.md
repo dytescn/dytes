@@ -318,7 +318,7 @@ dytes publish [--dir <path>] [--dry-run] [--platform <platform>] [--force]
 | `--dir <path>` | 包目录，默认当前目录 |
 | `--dry-run` | 只打印上传计划，不上传、不更新索引 |
 | `--platform <platform>` | 指定平台，默认当前系统 |
-| `--force` | 允许覆盖已存在对象 |
+| `--force` | 允许覆盖已存在对象；读取索引失败且无法列举时，允许创建新的 `packages.json`（可能覆盖其它包条目） |
 | `--json` | 输出发布结果 JSON |
 
 ### 6.3 示例

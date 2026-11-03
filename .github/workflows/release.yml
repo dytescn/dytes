@@ -189,6 +189,25 @@ jobs:
           destination_dir: core/dytes/latest/${{ matrix.platform }}
           endpoint: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
 
+      - name: Set short cache TTL on latest alias
+        continue-on-error: true
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.UPYUN_API_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.UPYUN_API_SECRET }}
+          AWS_DEFAULT_REGION: us-east-1
+          UPYUN_BUCKET: ${{ secrets.UPYUN_BUCKET }}
+          UPYUN_ENDPOINT: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
+          PLATFORM: ${{ matrix.platform }}
+          BINARY: ${{ matrix.binary }}
+        run: |
+          set -euo pipefail
+          aws configure set default.s3.addressing_style path
+          aws s3 cp "upload/$BINARY" "s3://$UPYUN_BUCKET/core/dytes/latest/$PLATFORM/$BINARY" \
+            --endpoint-url "$UPYUN_ENDPOINT" \
+            --cache-control "no-cache, max-age=60"
+          echo "已为 latest/$PLATFORM/$BINARY 设置短缓存"
+
   publish-manifest:
     name: Publish dytes.json
     needs:
@@ -249,6 +268,30 @@ jobs:
           source_dir: upload-latest
           destination_dir: core/dytes/latest
           endpoint: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
+
+      - name: Set short cache TTL on manifest and version script
+        continue-on-error: true
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.UPYUN_API_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.UPYUN_API_SECRET }}
+          AWS_DEFAULT_REGION: us-east-1
+          UPYUN_BUCKET: ${{ secrets.UPYUN_BUCKET }}
+          UPYUN_ENDPOINT: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
+        run: |
+          set -euo pipefail
+          aws configure set default.s3.addressing_style path
+          aws s3 cp upload-manifest/dytes.json \
+            "s3://$UPYUN_BUCKET/core/dytes/dytes.json" \
+            --endpoint-url "$UPYUN_ENDPOINT" \
+            --content-type "application/json" \
+            --cache-control "no-cache, max-age=60"
+          aws s3 cp upload-latest/version.js \
+            "s3://$UPYUN_BUCKET/core/dytes/latest/version.js" \
+            --endpoint-url "$UPYUN_ENDPOINT" \
+            --content-type "application/javascript" \
+            --cache-control "no-cache, max-age=60"
+          echo "已为 dytes.json 与 version.js 设置短缓存"
 
   github-release:
     name: Publish GitHub Release

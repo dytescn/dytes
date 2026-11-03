@@ -2,17 +2,27 @@ use std::collections::HashMap;
 
 use crate::shared::config::DytesConfig;
 
+/// 平台名归一化：把常见别名统一为 `windows` / `linux` / `macos`。
+pub fn normalize_platform(value: &str) -> String {
+    match value.trim().to_lowercase().as_str() {
+        "win" | "win32" | "win64" | "windows" => "windows".to_string(),
+        "mac" | "macos" | "darwin" | "osx" => "macos".to_string(),
+        "linux" => "linux".to_string(),
+        other => other.to_string(),
+    }
+}
+
 /// 当前平台：windows / linux / macos。
 pub fn current_platform() -> String {
     for key in ["DYTES_PLATFORM", "PIKSEL_PLATFORM"] {
         if let Ok(value) = std::env::var(key) {
-            let value = value.trim().to_lowercase();
+            let value = normalize_platform(&value);
             if !value.is_empty() {
                 return value;
             }
         }
     }
-    std::env::consts::OS.to_string()
+    normalize_platform(std::env::consts::OS)
 }
 
 /// 选择导出表；有 platform-exports 时必须命中当前平台。
@@ -23,10 +33,11 @@ pub fn select_exports<'a>(
     if config.platform_exports.is_empty() {
         Some((&config.exports, None))
     } else {
+        let platform = normalize_platform(platform);
         config
             .platform_exports
-            .get(platform)
-            .map(|exports| (exports, Some(platform)))
+            .get_key_value(&platform)
+            .map(|(key, exports)| (exports, Some(key.as_str())))
     }
 }
 
@@ -48,5 +59,14 @@ mod tests {
             remote_base("system", "0.1.0", Some("windows")),
             "system/0.1.0/windows/"
         );
+    }
+
+    #[test]
+    fn normalizes_platform_aliases() {
+        assert_eq!(normalize_platform("Win32"), "windows");
+        assert_eq!(normalize_platform("darwin"), "macos");
+        assert_eq!(normalize_platform(" osx "), "macos");
+        assert_eq!(normalize_platform("linux"), "linux");
+        assert_eq!(normalize_platform("freebsd"), "freebsd");
     }
 }

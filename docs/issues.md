@@ -1,7 +1,7 @@
 # dytes 已知问题
 
 > 记录实际使用中遇到的阻塞问题、复现方式与修复方向。
-> 最近更新：2026-11-01
+> 最近更新：2026-11-03
 
 ---
 
@@ -11,6 +11,7 @@
 **影响版本**：`dytes` 当前构建（含 `872d4de fix: handle missing packages index on object storage`）
 **影响包**：`sys/chatllm` 1.0.9、`ui/chat_ui` 1.0.12
 **严重程度**：P0 —— 发布无法完成，新版本不会出现在索引中
+**状态**：0.1.8 已提供 `--force` 临时通道；根因是 S3 凭证缺少读取 / 列举权限，仍需运维处理。代码侧错误分类（B）、ListObjects v1 降级（D）、本地索引兜底（E）尚未实现。
 
 ### 1. 现象
 
@@ -155,3 +156,58 @@ let _ = fs::remove_file(&tmp);
 
 - `packages.json` 同样走 `upload_bytes`，因此该修复对索引上传同样必要；
 - 索引读取仍受 I-01 的权限问题限制，本次未执行 `--force` 重建。
+
+---
+
+## I-03 GitHub #2：Windows 安装脚本缺少重试与校验
+
+**发现日期**：2026-11-03
+**来源**：<https://github.com/dytescn/dytes/issues/2>
+**状态**：0.1.11 修复（官网安装脚本与下载源）
+
+### 现象
+
+- `install.ps1` 直连 GitHub Release，国内网络慢且易断；
+- 下载中途失败会在目标路径留下截断的 `dytes.exe`；
+- 没有重试、进度与完整性校验。
+
+### 修复
+
+- 官网下载源改为 `https://packages.funxdata.com/core/dytes/latest/<platform>/`；
+- `install.sh` / `install.ps1` 先写临时文件，校验后原子替换；
+- 增加 3 次重试与进度提示；
+- 发布 workflow 为每个平台的二进制同时上传 `<file>.sha256`，安装脚本校验 SHA-256；
+- 支持 `DYTES_DOWNLOAD_BASE` 覆盖下载源，便于镜像 / 内网。
+
+### 配套
+
+- `dytes` release workflow 增加 `core/dytes/latest/<platform>/` 别名目录；
+- 官网 `index.html` 的下载按钮与版本号改为读取 packages 域名。
+
+---
+
+## I-04 GitHub #3：增加 CLI 自更新
+
+**发现日期**：2026-11-03
+**来源**：<https://github.com/dytescn/dytes/issues/3>
+**状态**：0.1.11 已实现 `dytes self-update`
+
+### 现象
+
+`dytes update` 只更新当前应用与依赖，不检查 CLI 自身版本；升级只能重跑安装脚本。
+
+### 修复
+
+新增命令：
+
+```bash
+dytes self-update --check   # 只检查，不下载
+dytes self-update           # 下载并替换自身
+dytes self-update --json    # 机器可读结果
+```
+
+- 从 `https://packages.funxdata.com/core/dytes/dytes.json` 读取最新版本；
+- 按当前平台下载 `core/dytes/latest/<platform>/<file>`；
+- 校验 `<file>.sha256`；
+- Unix 直接原子替换；Windows 先尝试重命名，失败时由退出后的 helper 完成替换；
+- `--check` 不写文件；同版本默认跳过，`--force` 可强制重装。

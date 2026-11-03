@@ -1,17 +1,18 @@
 use std::collections::HashMap;
 
 use crate::publish::utils::dytes::DytesConfig;
+use crate::shared::platform::normalize_platform;
 
 /// 当前平台名：windows / linux / macos
 /// 可用 PIKSEL_PLATFORM 环境变量覆盖，便于测试其它平台。
 pub fn current_platform() -> String {
     if let Ok(value) = std::env::var("PIKSEL_PLATFORM") {
-        let value = value.trim().to_lowercase();
+        let value = normalize_platform(&value);
         if !value.is_empty() {
             return value;
         }
     }
-    std::env::consts::OS.to_string()
+    normalize_platform(std::env::consts::OS)
 }
 
 /// 选择当前平台的导出文件；没有平台专用配置时回退到通用 exports。
@@ -22,10 +23,11 @@ pub fn select_exports<'a>(
     if config.platform_exports.is_empty() {
         Some((&config.exports, None))
     } else {
+        let platform = normalize_platform(platform);
         config
             .platform_exports
-            .get(platform)
-            .map(|exports| (exports, Some(platform)))
+            .get_key_value(&platform)
+            .map(|(key, exports)| (exports, Some(key.as_str())))
     }
 }
 

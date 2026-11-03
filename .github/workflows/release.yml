@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      allow_same_version:
+        description: "允许与线上相同的版本（仅用于重发）"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -17,8 +22,42 @@ env:
   CARGO_TERM_COLOR: never
 
 jobs:
+  preflight:
+    name: Verify release version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify versions and tag
+        shell: bash
+        env:
+          ALLOW_SAME_VERSION: ${{ inputs.allow_same_version || 'false' }}
+        run: |
+          set -euo pipefail
+          args=(--check)
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            args+=(--tag "$GITHUB_REF_NAME")
+          fi
+          if [[ "$ALLOW_SAME_VERSION" == "true" ]]; then
+            args+=(--allow-same)
+          fi
+          node scripts/release.mjs "${args[@]}"
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./dytes.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Release version: $version"
+
   build:
     name: Build ${{ matrix.platform }}
+    needs: preflight
     runs-on: ${{ matrix.os }}
     environment: product
     env:
@@ -110,6 +149,19 @@ jobs:
           cp "target/release/${{ matrix.binary }}" "artifact/${{ matrix.artifact }}"
           ls -l upload artifact
 
+      - name: Write SHA-256 checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('fs');
+            const crypto = require('crypto');
+            const file = process.argv[1];
+            const hash = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+            fs.writeFileSync(file + '.sha256', hash + '  ' + require('path').basename(file) + '\n');
+          " "upload/${{ matrix.binary }}"
+          cat "upload/${{ matrix.binary }}.sha256"
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -127,9 +179,21 @@ jobs:
           destination_dir: core/dytes/${{ steps.version.outputs.version }}/${{ matrix.platform }}
           endpoint: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
 
+      - name: Publish latest alias
+        uses: shallwefootball/s3-upload-action@master
+        with:
+          aws_key_id: ${{ secrets.UPYUN_API_KEY }}
+          aws_secret_access_key: ${{ secrets.UPYUN_API_SECRET }}
+          aws_bucket: ${{ secrets.UPYUN_BUCKET }}
+          source_dir: upload
+          destination_dir: core/dytes/latest/${{ matrix.platform }}
+          endpoint: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
+
   publish-manifest:
     name: Publish dytes.json
-    needs: build
+    needs:
+      - preflight
+      - build
     runs-on: ubuntu-latest
     environment: product
     steps:
@@ -148,9 +212,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p upload-manifest
+          mkdir -p upload-manifest upload-latest
           cp dytes.json upload-manifest/dytes.json
-          ls -l upload-manifest
+          node -e "
+            const fs = require('fs');
+            const version = require('./dytes.json').version;
+            const base = 'https://packages.funxdata.com/core/dytes/latest';
+            const downloads = {
+              windows: base + '/windows/dytes.exe',
+              linux: base + '/linux/dytes',
+              macos: base + '/macos/dytes',
+            };
+            fs.writeFileSync(
+              'upload-latest/version.js',
+              'window.DYTES_RELEASE=' + JSON.stringify({ version, downloads }) + ';\n'
+            );
+          "
+          ls -l upload-manifest upload-latest
 
       - name: Upload manifest to UpYun S3
         uses: shallwefootball/s3-upload-action@master
@@ -162,10 +240,21 @@ jobs:
           destination_dir: core/dytes
           endpoint: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
 
+      - name: Upload website version script to UpYun S3
+        uses: shallwefootball/s3-upload-action@master
+        with:
+          aws_key_id: ${{ secrets.UPYUN_API_KEY }}
+          aws_secret_access_key: ${{ secrets.UPYUN_API_SECRET }}
+          aws_bucket: ${{ secrets.UPYUN_BUCKET }}
+          source_dir: upload-latest
+          destination_dir: core/dytes/latest
+          endpoint: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
+
   github-release:
     name: Publish GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
     needs:
+      - preflight
       - build
       - publish-manifest
     runs-on: ubuntu-latest
@@ -190,3 +279,127 @@ jobs:
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  verify-release:
+    name: Verify published files
+    needs:
+      - preflight
+      - publish-manifest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify download endpoints and manifest content
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./dytes.json').version")
+          base="${DYTES_PACKAGES_BASE:-https://packages.funxdata.com/core/dytes}"
+
+          check_status() {
+            local url="$1"
+            local attempt code
+            for attempt in $(seq 1 20); do
+              code=$(curl -sS -L -o /dev/null -w '%{http_code}' --max-time 20 "$url" || true)
+              if [ "$code" = "200" ]; then
+                echo "OK $url"
+                return 0
+              fi
+              echo "等待 $url (HTTP ${code:-000}, $attempt/20)"
+              sleep 15
+            done
+            echo "::error::发布自检失败: $url 不可访问。若对象已上传，请刷新 CDN 缓存后重试。"
+            return 1
+          }
+
+          for platform in windows linux macos; do
+            case "$platform" in
+              windows) file="dytes.exe" ;;
+              *) file="dytes" ;;
+            esac
+            check_status "$base/$version/$platform/$file?t=$(date +%s)"
+            check_status "$base/latest/$platform/$file?t=$(date +%s)"
+            check_status "$base/latest/$platform/$file.sha256?t=$(date +%s)"
+          done
+
+          echo "检查 dytes.json 内容..."
+          manifest_ok=false
+          for attempt in $(seq 1 20); do
+            manifest_version=$(curl -fsSL "$base/dytes.json?t=$(date +%s)" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).version)}catch{console.log("")}})')
+            if [ "$manifest_version" = "$version" ]; then
+              echo "OK dytes.json -> $version"
+              manifest_ok=true
+              break
+            fi
+            echo "等待 dytes.json 更新 (读到 ${manifest_version:-空}, $attempt/20)"
+            sleep 15
+          done
+          if [ "$manifest_ok" != "true" ]; then
+            echo "::error::dytes.json 内容仍不是 $version。请刷新 CDN 缓存 (core/dytes/dytes.json)。"
+            exit 1
+          fi
+
+          echo "检查 version.js 内容..."
+          script_ok=false
+          for attempt in $(seq 1 20); do
+            script=$(curl -fsSL "$base/latest/version.js?t=$(date +%s)" || true)
+            if printf '%s' "$script" | grep -q "\"version\":\"$version\""; then
+              echo "OK version.js -> $version"
+              script_ok=true
+              break
+            fi
+            echo "等待 version.js 更新 ($attempt/20)"
+            sleep 15
+          done
+          if [ "$script_ok" != "true" ]; then
+            echo "::error::version.js 内容仍不是 $version。请刷新 CDN 缓存 (core/dytes/latest/version.js)。"
+            exit 1
+          fi
+
+  notify-website:
+    name: Notify website repository
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - preflight
+      - github-release
+      - verify-release
+    runs-on: ubuntu-latest
+    env:
+      WEBSITE_DISPATCH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
+      RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+    steps:
+      - name: Dispatch dytes-release to website repository
+        if: env.WEBSITE_DISPATCH_TOKEN != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload=$(node -e '
+            const base = "https://packages.funxdata.com/core/dytes/latest";
+            const version = process.env.RELEASE_VERSION;
+            console.log(JSON.stringify({
+              event_type: "dytes-release",
+              client_payload: {
+                version,
+                downloads: {
+                  windows: `${base}/windows/dytes.exe`,
+                  linux: `${base}/linux/dytes`,
+                  macos: `${base}/macos/dytes`,
+                },
+              },
+            }));
+          ')
+          curl -fsS -X POST \
+            -H "Authorization: Bearer $WEBSITE_DISPATCH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/dytescn/dytescn.github.io/dispatches" \
+            --data "$payload"
+          echo "已通知官网仓库同步版本 $RELEASE_VERSION"
+
+      - name: Website sync skipped
+        if: env.WEBSITE_DISPATCH_TOKEN == ''
+        shell: bash
+        run: |
+          echo "::warning::未配置 WEBSITE_DISPATCH_TOKEN，跳过官网自动同步。"
+          echo "官网仍会在页面加载时读取 latest/version.js；建议配置 token 以在发布后立即更新官网静态版本文件。"

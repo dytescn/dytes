@@ -1,4 +1,5 @@
 pub mod dytes;
+pub mod self_update;
 pub mod update_app;
 pub mod update_design;
 pub mod update_model;

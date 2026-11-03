@@ -14,10 +14,11 @@
 | 命令 | 状态 | 说明 |
 | --- | --- | --- |
 | `dytes update` | 可用 | 原生更新引擎，支持 `--check` / `--offline` / `--discover` / `--init` |
+| `dytes self-update` | 可用 | 从 `packages.funxdata.com` 检查并升级 CLI 自身 |
 | `dytes config` | 可用 | 管理 S3 endpoint、bucket、AK/SK 与平台 |
 | `dytes init` | 可用 | 生成七种包类型的 `dytes.json` 模板 |
 | `dytes publish --dry-run` | 可用 | 输出发布文件与远程路径，不上传 |
-| `dytes publish` | 迁移中 | 实际上传仍待接入 |
+| `dytes publish` | 可用 | 上传导出文件、`dytes.json` 与 `packages.json`，支持 `--platform` / `--force` |
 | `dytes install` | 可用（plugin / design-soft） | 复用更新引擎安装设计插件与设计软件；其他包类型待接入 |
 
 ## 包类型
@@ -37,7 +38,7 @@
 仓库根目录提供 composite Action，可在其它仓库的 workflow 中直接发布包：
 
 ```yaml
-      - uses: dytescn/dytes@v0.1.9
+      - uses: dytescn/dytes@v0.1.11
         with:
           command: publish
 ```
@@ -139,14 +140,35 @@ target/release/dytes       # Linux / macOS
 
 ## 发布
 
+每次发布必须递增一个小版本（patch）。使用仓库内的发布脚本：
+
+```bash
+# 自动 patch +1（0.1.11 -> 0.1.12），提交、打 tag 并推送
+node scripts/release.mjs
+
+# 已经手工改好版本时，直接校验并发布
+node scripts/release.mjs --current
+
+# 只校验：三处版本一致、tag 对应、且大于线上版本
+node scripts/release.mjs --check
+```
+
+脚本会同步 `dytes.json`、`Cargo.toml`、`Cargo.lock`，发布前检查线上
+`https://packages.funxdata.com/core/dytes/dytes.json`，拒绝重复版本或版本回退。
+
 GitHub Actions 在推送 `v*` tag 或手动触发时：
 
-1. 在 Windows / Linux / macOS 构建
-2. 运行库测试
-3. 上传二进制到 GitHub Release
-4. 上传到 S3：
+1. **preflight**：校验 tag / 清单 / Cargo 版本一致，且大于线上版本；
+2. 在 Windows / Linux / macOS 构建，运行库测试；
+3. 上传二进制到 S3：
    - `core/dytes/<version>/<platform>/dytes`
-   - `core/dytes/dytes.json`
+   - `core/dytes/latest/<platform>/dytes`
+   - 同名 `.sha256` 校验文件
+4. 上传 `core/dytes/dytes.json` 与 `core/dytes/latest/version.js`；
+5. 上传二进制到 GitHub Release；
+6. **verify-release**：检查三个平台的版本目录 / latest / sha256 可下载，
+   并确认 `dytes.json` 与 `version.js` 内容已是新版本；
+7. **notify-website**：通知 `dytescn/dytescn.github.io` 同步官网版本。
 
 需要配置 Environment `product` 下的 Secrets：
 
@@ -157,12 +179,22 @@ UPYUN_BUCKET
 UPYUN_ENDPOINT
 ```
 
+官网自动同步还需要（`dytes` 仓库 Secrets）：
+
+```text
+WEBSITE_DISPATCH_TOKEN   # 对 dytescn/dytescn.github.io 有 contents 写权限的 PAT
+```
+
+未配置时发布会警告并跳过自动同步，官网仍会在页面加载时读取 `version.js`。
+
 发布命令：
 
 ```bash
 git tag v0.1.0
 git push origin v0.1.0
 ```
+
+或直接使用 `node scripts/release.mjs`。
 
 ## License
 

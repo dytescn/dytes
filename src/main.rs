@@ -30,6 +30,8 @@ enum Commands {
     Install(InstallArgs),
     /// 检查并安装依赖更新
     Update(UpdateArgs),
+    /// 更新 dytes CLI 自身
+    SelfUpdate(SelfUpdateArgs),
     /// 发布当前包
     Publish(PublishArgs),
     /// 初始化 dytes.json
@@ -86,6 +88,18 @@ struct UpdateArgs {
     force: bool,
     #[arg(long)]
     dir: Option<PathBuf>,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args)]
+struct SelfUpdateArgs {
+    /// 只检查是否有新版本，不下载
+    #[arg(long)]
+    check: bool,
+    /// 同版本也重新下载
+    #[arg(long)]
+    force: bool,
     #[arg(long)]
     json: bool,
 }
@@ -177,6 +191,7 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Publish(args) => run_publish(args),
         Commands::Install(args) => run_install(args),
         Commands::Update(args) => run_update(args),
+        Commands::SelfUpdate(args) => run_self_update(args),
     }
 }
 
@@ -503,6 +518,17 @@ fn run_update(args: UpdateArgs) -> Result<()> {
     }
 }
 
+fn run_self_update(args: SelfUpdateArgs) -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|e| DytesError::failed(format!("创建异步运行时失败: {e}")))?;
+    runtime
+        .block_on(dytes::update::run::self_update::run(
+            args.check, args.force, args.json,
+        ))
+        .map_err(|e| DytesError::failed(format!("自更新失败: {e:#}")))?;
+    Ok(())
+}
+
 fn run_update_inner(args: UpdateArgs) -> Result<()> {
     if args.startup
         && !dytes::update::run::dytes::startup_allowed()
@@ -555,11 +581,8 @@ fn run_update_inner(args: UpdateArgs) -> Result<()> {
         let update = dytes::update::run::dytes::init_dytes_with_options(None, sync_online);
         let result = if args.startup {
             const STARTUP_TIMEOUT_SECS: u64 = 8;
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(STARTUP_TIMEOUT_SECS),
-                update,
-            )
-            .await
+            match tokio::time::timeout(std::time::Duration::from_secs(STARTUP_TIMEOUT_SECS), update)
+                .await
             {
                 Ok(result) => result,
                 Err(_) => {

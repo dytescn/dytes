@@ -34,7 +34,7 @@
 
 ## 2. 目标
 
-1. **一个二进制**：`dytes` 提供 `install` / `update` / `publish` / `init` / `config` 子命令。
+1. **一个二进制**：`dytes` 提供 `install` / `update` / `self-update` / `publish` / `init` / `config` 子命令。
 2. **安装**：`dytes install` 可安装应用、插件与依赖包，不再依赖独立安装器。
 3. **更新**：`dytes update` 覆盖现有 `update.exe` 的全部模式，并保留 `--auto` / `--startup` 等内部调用。
 4. **发布**：`dytes publish` 覆盖现有发布流程，并支持 `--dry-run`。
@@ -56,6 +56,7 @@ dytes <command> [options]
 | --- | --- |
 | `dytes install` | 安装应用、插件或指定包 |
 | `dytes update` | 检查并安装依赖更新 |
+| `dytes self-update` | 检查并升级 dytes 自身 |
 | `dytes publish` | 发布当前包到对象存储 |
 | `dytes init` | 初始化 `dytes.json` |
 | `dytes config` | 查看 / 设置 S3 凭证与平台 |
@@ -345,6 +346,10 @@ dytes publish [--dir <path>] [--dry-run] [--platform <platform>] [--force]
   - `design_soft` → `design_soft/`
   - `model` → `models/`
 - 平台导出使用 `platform-exports`；没有平台配置时回退 `exports`；
+- 当前平台由 `DYTES_PLATFORM` / `PIKSEL_PLATFORM` 或 `std::env::consts::OS` 决定，
+  `win` / `mac` / `darwin` / `osx` 等别名会归一化为 `windows` / `macos`；
+- 安装器（`dytes install` 引导阶段）同样按平台选择 `platform-exports`，并下载
+  `core/<name>/<version>/<platform>/<file>`；
 - 导出目标文件名不允许包含路径分隔符（当前 `publish` 的限制保留）；
 - 凭证错误必须给出明确提示，不打印密钥。
 
@@ -431,7 +436,7 @@ dytes init [--type <type>] [--name <name>] [--version <ver>] [--dir <path>] [--f
 | 原子性 | 下载失败、校验失败不更新锁文件；publish 不提前更新索引 |
 | 网络 | 超时、重试、断点 / 失败清理；`--offline` 明确行为 |
 | 安全 | 凭证只从配置 / 环境变量读取；日志脱敏；包校验可选 |
-| 跨平台 | Windows 为主；路径、扩展名、平台导出按现有规则 |
+| 跨平台 | Windows / Linux / macOS；路径、扩展名、平台导出按现有规则 |
 | 日志 | 控制台 + 文件；`--json` 提供结构化结果 |
 | 性能 | 更新只下载变化文件；大包显示进度 |
 | 可测试性 | 业务逻辑与 CLI / GUI 解耦，核心模块可单测 |
@@ -477,9 +482,7 @@ dytes init [--type <type>] [--name <name>] [--version <ver>] [--dir <path>] [--f
 - 包签名 / 哈希校验（可列为后续增强）；
 - GUI 安装器重写；
 - 插件市场 UI；
-- 依赖冲突的自动降级 / 自动回滚（先保证失败可重试）；
-- 跨平台打包矩阵扩展。
-
+- 依赖冲突的自动降级 / 自动回滚（先保证失败可重试）。
 ---
 
 ## 13. 待确认

@@ -39,24 +39,26 @@ piksel_install/
 - **P1**：影响体验、可测试性或发布流程
 - **P2**：优化项，可后续迭代
 
-### 0.3 实施进度（本轮）
+### 0.3 实施进度（0.3 阶段记录）
+
+> 下表是 0.3 阶段的迁移记录，不代表 0.1.11 当前状态。最新能力与版本见
+> [README](../README.md) 与 [release-0.1.11.md](release-0.1.11.md)。
 
 | 任务 | 状态 | 说明 |
 | --- | --- | --- |
 | D-01 工程结构 | 部分完成 | 已新增 `core/`（`dytes-core`）与 `dytes/`；未建根 workspace，避免影响旧子项目 |
-| D-02 配置 / 清单 / 锁 | 部分完成 | `core` 已实现 `DytesConfig`、`DytesLock`；旧 `update` / `publish` 尚未切换 |
-| D-03 存储 / 平台 / 版本 | 部分完成 | 平台、版本、包路径已统一；S3 客户端与下载上传尚未迁移 |
-| D-03.1 S3 凭证 | 部分完成 | 已实现 `core::credentials` 与 `dytes config`；旧三处硬编码尚未删除 |
-| D-04 install 引擎 | 未开始 | `dytes install` 当前返回未实现提示 |
+| D-02 配置 / 清单 / 锁 | 完成 | `DytesConfig` / `DytesLock` / `dytes config` 已统一 |
+| D-03 存储 / 平台 / 版本 | 完成 | 平台、版本、包路径、S3 下载上传已统一 |
+| D-03.1 S3 凭证 | 部分完成 | 已实现 `core::credentials` 与 `dytes config`；I-01 的读写权限仍需运维配置 |
+| D-04 install 引擎 | 部分完成 | `dytes install plugin` / `design-soft` 可用；app / core / sys / web / model 待接入 |
 | D-05 GUI | 未开始 | 旧 `install.exe` 保持原状 |
-| D-06 update | 基本完成 | `dytes update` 已接入原生 update 引擎；`--type` / `--force` / startup 节流待补 |
-| D-07 publish | 部分完成 | `publish --dry-run` 可用；上传与索引更新未迁移 |
+| D-06 update | 完成 | `dytes update` 已支持 `--type` / `--force` / `--startup` / `--check` |
+| D-07 publish | 完成 | 上传、`dytes.json`、`packages.json`、`--platform` / `--force` 已接通 |
 | D-08 init | 完成 | 七种模板均可生成并通过校验 |
-| D-09 CLI | 部分完成 | clap 子命令、`config` / `init` / `publish --dry-run` 已接通 |
+| D-09 CLI | 完成 | clap 子命令、`config` / `init` / `publish` / `self-update` 已接通 |
 | D-10 兼容入口 | 部分完成 | `dytes update` 已通过 `update.exe` 兼容运行 |
 
-> 本轮已完成 `core` / `dytes` 骨架、`dytes config`、`dytes init`、`dytes publish --dry-run`；
-> `dytes install` 与 `dytes update` 仍待迁移。
+> 0.1.11 新增 `dytes self-update`、平台别名归一化与安装器 `platform-exports` 支持。
 
 本轮验证：
 

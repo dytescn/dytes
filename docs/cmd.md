@@ -13,6 +13,7 @@
 dytes
 ├── install     安装应用 / 插件 / 依赖包
 ├── update      检查并安装更新
+├── self-update 检查并升级 dytes 自身
 ├── publish     发布当前包
 ├── init        初始化 dytes.json
 ├── config      S3 凭证与工具配置
@@ -47,6 +48,17 @@ dytes
 | `2` | 参数错误 |
 | `3` | 配置 / 清单错误 |
 | `4` | 有可用更新（仅 `update --check`） |
+
+新增自更新命令：
+
+```bash
+dytes self-update [--check] [--force] [--json]
+```
+
+- 版本来源 `https://packages.funxdata.com/core/dytes/dytes.json`；
+- 下载 `https://packages.funxdata.com/core/dytes/latest/<platform>/<file>`；
+- 校验同目录 `<file>.sha256`；
+- `--check` 只比较版本，不写文件；`--force` 同版本也重新下载。
 
 ---
 

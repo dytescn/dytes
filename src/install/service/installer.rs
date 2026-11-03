@@ -1,6 +1,4 @@
 use anyhow::{anyhow, bail, Context, Result};
-use serde::Deserialize;
-use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -8,6 +6,8 @@ use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::install::utils::s3;
+use crate::shared::config::DytesConfig;
+use crate::shared::platform;
 
 /// 安装器负责分发的应用名。
 ///
@@ -24,14 +24,6 @@ pub struct InstallProgress {
     pub total: f32,
     pub file: f32,
     pub status: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct PackageConfig {
-    name: String,
-    version: String,
-    #[serde(default)]
-    exports: HashMap<String, String>,
 }
 
 /// 安装日志，写入安装目录下的 install.log
@@ -100,16 +92,25 @@ where
             .context("获取 update 包配置失败")?;
         log.write(&format!("update 配置: {}", update_text));
 
-        let update_config: PackageConfig =
+        let update_config: DytesConfig =
             serde_json::from_str(&update_text).context("解析 update 包配置失败")?;
 
-        if update_config.exports.is_empty() {
+        let platform = platform::current_platform();
+        let Some((exports, platform_tag)) = platform::select_exports(&update_config, &platform)
+        else {
+            bail!(
+                "update 包 {} 未发布平台 {}",
+                update_config.version,
+                platform
+            );
+        };
+        if exports.is_empty() {
             bail!("update 包 {} 没有导出文件", update_config.version);
         }
+        log.write(&format!("目标平台: {platform}"));
 
         // 2. 下载 update 包导出的文件（通常是 update.exe）
-        let mut files: Vec<(String, String)> = update_config
-            .exports
+        let mut files: Vec<(String, String)> = exports
             .iter()
             .map(|(source, dest)| (source.clone(), dest.clone()))
             .collect();
@@ -125,8 +126,13 @@ where
             let filename = file_name_of(remote_name);
             let dest = install_dir.join(&filename);
             let key = format!(
-                "core/{}/{}/{}",
-                UPDATE_PACKAGE, update_config.version, filename
+                "{}{}",
+                platform::remote_base(
+                    &format!("core/{UPDATE_PACKAGE}"),
+                    &update_config.version,
+                    platform_tag
+                ),
+                filename
             );
             let base = download_start + span * index as f32;
 
@@ -182,7 +188,7 @@ where
             .context("获取应用配置失败")?;
         log.write(&format!("应用配置: {}", app_text));
 
-        let app_config: PackageConfig =
+        let app_config: DytesConfig =
             serde_json::from_str(&app_text).context("解析应用配置失败")?;
         if app_config.name.trim().is_empty() {
             bail!("应用配置缺少 name 字段");

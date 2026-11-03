@@ -35,12 +35,10 @@
 
 ## GitHub Action
 
-仓库根目录提供 composite Action，可在其它仓库的 workflow 中直接发布包：
-
 ```yaml
-      - uses: dytescn/dytes@v0.1.11
-        with:
-          command: publish
+- uses: dytescn/dytes@v0.1.11
+  with:
+    command: publish
 ```
 
 详见 [docs/action.md](docs/action.md)。
@@ -48,21 +46,14 @@
 ## 快速开始
 
 ```bash
-# 配置 S3（敏感值可省略，使用交互式输入）
 dytes config set s3.endpoint https://s3.api.upyun.com
 dytes config set s3.bucket packages
 dytes config set s3.access_key
 dytes config set s3.secret_key
 
-# 初始化一个能力库
-dytes init --type sys --name info_lib --version 0.1.0
-
-# 检查 / 执行更新
+dytes init --type sys --name info_lib
 dytes update --check
-dytes update
-
-# 预览发布
-dytes publish --dir <包目录> --dry-run
+dytes publish --dry-run
 ```
 
 ## 全局命令
@@ -140,61 +131,19 @@ target/release/dytes       # Linux / macOS
 
 ## 发布
 
-每次发布必须递增一个小版本（patch）。使用仓库内的发布脚本：
+每次发布必须递增一个小版本（patch）：
 
 ```bash
-# 自动 patch +1（0.1.11 -> 0.1.12），提交、打 tag 并推送
-node scripts/release.mjs
-
-# 已经手工改好版本时，直接校验并发布
-node scripts/release.mjs --current
-
-# 只校验：三处版本一致、tag 对应、且大于线上版本
-node scripts/release.mjs --check
+node scripts/release.mjs            # 自动 patch +1，提交、打 tag、推送
+node scripts/release.mjs --current  # 发布已手工改好的版本
+node scripts/release.mjs --check    # 只校验，不修改
 ```
 
-脚本会同步 `dytes.json`、`Cargo.toml`、`Cargo.lock`，发布前检查线上
-`https://packages.funxdata.com/core/dytes/dytes.json`，拒绝重复版本或版本回退。
+`preflight` 校验版本与 tag，`verify-release` 检查三平台产物和 `latest`；
+`dytes.json` / `version.js` 受 CDN 缓存影响时只告警，不影响发布。
 
-GitHub Actions 在推送 `v*` tag 或手动触发时：
-
-1. **preflight**：校验 tag / 清单 / Cargo 版本一致，且大于线上版本；
-2. 在 Windows / Linux / macOS 构建，运行库测试；
-3. 上传二进制到 S3：
-   - `core/dytes/<version>/<platform>/dytes`
-   - `core/dytes/latest/<platform>/dytes`
-   - 同名 `.sha256` 校验文件
-4. 上传 `core/dytes/dytes.json` 与 `core/dytes/latest/version.js`；
-5. 上传二进制到 GitHub Release；
-6. **verify-release**：检查三个平台的版本目录 / latest / sha256 可下载，
-   并确认 `dytes.json` 与 `version.js` 内容已是新版本；
-7. **notify-website**：通知 `dytescn/dytescn.github.io` 同步官网版本。
-
-需要配置 Environment `product` 下的 Secrets：
-
-```text
-UPYUN_API_KEY
-UPYUN_API_SECRET
-UPYUN_BUCKET
-UPYUN_ENDPOINT
-```
-
-官网自动同步还需要（`dytes` 仓库 Secrets）：
-
-```text
-WEBSITE_DISPATCH_TOKEN   # 对 dytescn/dytescn.github.io 有 contents 写权限的 PAT
-```
-
-未配置时发布会警告并跳过自动同步，官网仍会在页面加载时读取 `version.js`。
-
-发布命令：
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-或直接使用 `node scripts/release.mjs`。
+官网运行时读取 `latest/version.js`，无需额外配置即可显示新版本；
+如需同步官网静态版本文件，配置 `WEBSITE_DISPATCH_TOKEN`。
 
 ## License
 

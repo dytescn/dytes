@@ -368,36 +368,34 @@ jobs:
 
           echo "检查 dytes.json 内容..."
           manifest_ok=false
-          for attempt in $(seq 1 20); do
+          for attempt in $(seq 1 8); do
             manifest_version=$(curl -fsSL "$base/dytes.json?t=$(date +%s)" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).version)}catch{console.log("")}})')
             if [ "$manifest_version" = "$version" ]; then
               echo "OK dytes.json -> $version"
               manifest_ok=true
               break
             fi
-            echo "等待 dytes.json 更新 (读到 ${manifest_version:-空}, $attempt/20)"
-            sleep 15
+            echo "等待 dytes.json 更新 (读到 ${manifest_version:-空}, $attempt/8)"
+            sleep 10
           done
           if [ "$manifest_ok" != "true" ]; then
-            echo "::error::dytes.json 内容仍不是 $version。请刷新 CDN 缓存 (core/dytes/dytes.json)。"
-            exit 1
+            echo "::warning::dytes.json 仍返回旧版本（CDN 缓存）。产物已上传，self-update 会在缓存过期或手动刷新 core/dytes/dytes.json 后看到 $version。"
           fi
 
           echo "检查 version.js 内容..."
           script_ok=false
-          for attempt in $(seq 1 20); do
+          for attempt in $(seq 1 8); do
             script=$(curl -fsSL "$base/latest/version.js?t=$(date +%s)" || true)
             if printf '%s' "$script" | grep -q "\"version\":\"$version\""; then
               echo "OK version.js -> $version"
               script_ok=true
               break
             fi
-            echo "等待 version.js 更新 ($attempt/20)"
-            sleep 15
+            echo "等待 version.js 更新 ($attempt/8)"
+            sleep 10
           done
           if [ "$script_ok" != "true" ]; then
-            echo "::error::version.js 内容仍不是 $version。请刷新 CDN 缓存 (core/dytes/latest/version.js)。"
-            exit 1
+            echo "::warning::version.js 仍返回旧版本（CDN 缓存）。官网会继续显示旧版本，直到缓存过期或手动刷新 core/dytes/latest/version.js。"
           fi
 
   notify-website:

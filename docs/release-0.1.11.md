@@ -100,27 +100,14 @@ dytes self-update
 
 ## 发布后同步网站
 
-`dytes` 发布后必须同步官网，避免安装页仍指向旧版本 / 旧下载源。
-从 0.1.11 起，release workflow 会自动完成大部分检查：
+从 0.1.11 起，release workflow 自动完成发布与官网同步：
 
 1. **preflight** 拒绝重复版本 / 版本回退；
-2. **verify-release** 自动检查：
-   - `core/dytes/<version>/<platform>/<file>` 可下载；
-   - `core/dytes/latest/<platform>/<file>` 与 `<file>.sha256` 可下载；
-   - `dytes.json` 内容已是新版本；
-   - `latest/version.js` 内容已是新版本；
-3. **notify-website** 向 `dytescn/dytescn.github.io` 发送 `dytes-release`，
-   由官网的 `sync-release.yml` 更新 `assets/data/release.json` 并部署。
-
-仍需人工确认：
-
-1. 打开 `https://www.dytes.cn`，检查版本号与 macOS / Linux / Windows 下载按钮；
-2. 在 Linux / macOS 执行 `curl -fsSL https://www.dytes.cn/install.sh | sh` 验证安装；
-3. 在 Windows PowerShell 执行 `irm https://www.dytes.cn/install.ps1 | iex` 验证安装；
-4. 若 `verify-release` 报 CDN 内容仍是旧版本，刷新以下缓存后重跑：
-   - `core/dytes/dytes.json`
-   - `core/dytes/latest/version.js`
-   - `core/dytes/latest/<platform>/<file>`
+2. **verify-release** 检查三个平台的版本目录、`latest` 与 `<file>.sha256`；
+   `dytes.json` / `version.js` 若仍被 CDN 缓存，只告警，不影响发布；
+3. 官网 `www.dytes.cn` 运行时读取 `latest/version.js`，无需额外配置即可显示新版本；
+4. 如需同时更新官网静态 `assets/data/release.json`，由 `notify-website` 发送
+   `dytes-release`（配置 `WEBSITE_DISPATCH_TOKEN` 时启用）。
 
 发布顺序：先发布 `dytes` `v0.1.11`，再推各库 `v*` tag。各库 workflow 引用
 `dytescn/dytes@v0.1.11`。

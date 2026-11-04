@@ -94,6 +94,7 @@ pub async fn update_os_info(name: String, declared_version: String) -> Result<()
                 remote_app_info.uuid.as_deref(),
                 &name,
                 &remote_app_info.version,
+                Some(&declared_version),
                 "core",
                 loader,
             )?;
@@ -140,6 +141,7 @@ pub async fn update_os_info(name: String, declared_version: String) -> Result<()
         remote_app_info.uuid.as_deref(),
         &name,
         &remote_app_info.version,
+        Some(&declared_version),
         "core",
         loader,
     )?;

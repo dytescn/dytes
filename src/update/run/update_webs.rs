@@ -1,4 +1,3 @@
-use super::{update_design, update_os, update_sys};
 use crate::shared::checksum::verify_download;
 use crate::update::utils::dytes::DytesConfig;
 use crate::update::utils::env::get_app_dir;
@@ -42,6 +41,27 @@ pub async fn update_webs_info(
     let remote_app_info: DytesConfig = serde_json::from_str(&remote_text)
         .with_context(|| format!("解析 webs/{}/dytes.json 失败", name))?;
 
+    // 仅清单包：没有产物，只保存清单并登记版本。
+    if remote_app_info.exports.is_empty() && remote_app_info.platform_exports.is_empty() {
+        let app_dir = get_app_dir();
+        let web_dir = format!("{}/web/{}", app_dir.trim_end_matches('/'), name);
+        fs::create_dir_all(&web_dir)?;
+        fs::write(format!("{}/dytes.json", web_dir), &remote_text)?;
+        update_package_in_lock(
+            remote_app_info.uuid.as_deref(),
+            &name,
+            &remote_app_info.version,
+            Some(&declared_version),
+            "web",
+            Vec::new(),
+        )?;
+        println!(
+            "  仅清单 Web 包已安装: {} v{}",
+            name, remote_app_info.version
+        );
+        return Ok(None);
+    }
+
     let platform = crate::update::utils::platform::current_platform();
     let Some((exports, platform_tag)) =
         crate::update::utils::platform::select_exports(&remote_app_info, &platform)
@@ -58,37 +78,7 @@ pub async fn update_webs_info(
     println!("  平台: {}", platform);
     println!("  导出文件: {:?}", exports);
 
-    // 先安装 Web 包声明的依赖（例如 init 依赖 database），再判断自身是否更新
-    for (dep_name, dep_version) in &remote_app_info.dependencies_core {
-        println!("  安装 Web 包核心依赖: {} {}", dep_name, dep_version);
-        update_os::update_os_info(dep_name.clone(), dep_version.clone()).await?;
-    }
-    for (dep_name, dep_version) in &remote_app_info.dependencies_sys {
-        println!("  安装 Web 包系统依赖: {} {}", dep_name, dep_version);
-        update_sys::update_sys_info(dep_name.clone(), dep_version.clone()).await?;
-    }
-    for (dep_name, dep_version) in &remote_app_info.dependencies_design_plugins {
-        println!("  安装 Web 包设计插件依赖: {} {}", dep_name, dep_version);
-        update_design::update_design_info(
-            dep_name.clone(),
-            dep_version.clone(),
-            update_design::DesignKind::Plugin,
-            false,
-            None,
-        )
-        .await?;
-    }
-    for (dep_name, dep_version) in &remote_app_info.dependencies_design_soft {
-        println!("  安装 Web 包设计软件依赖: {} {}", dep_name, dep_version);
-        update_design::update_design_info(
-            dep_name.clone(),
-            dep_version.clone(),
-            update_design::DesignKind::Soft,
-            false,
-            None,
-        )
-        .await?;
-    }
+    // 依赖由 update::run::dytes 的依赖计划统一展开与排序，这里不再递归安装。
 
     // 声明版本可能滞后于远程实际版本，以远程版本为准判断是否真的需要更新
     if let Ok(Some(lock_version)) = get_package_version_from_lock(&name) {
@@ -160,6 +150,7 @@ pub async fn update_webs_info(
         remote_app_info.uuid.as_deref(),
         &name,
         &remote_app_info.version,
+        Some(&declared_version),
         "web",
         loader,
     )?;

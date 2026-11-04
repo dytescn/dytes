@@ -58,7 +58,7 @@ fn default_auto_update() -> bool {
 }
 
 /// 依赖类型
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum DependencyType {
     Core, // 可执行文件
     Sys,  // 系统库
@@ -83,22 +83,75 @@ impl DependencyType {
     pub fn from_name(s: &str) -> Option<Self> {
         match s {
             "core" => Some(DependencyType::Core),
-            "sys" => Some(DependencyType::Sys),
-            "web" => Some(DependencyType::Web),
+            "sys" | "system" => Some(DependencyType::Sys),
+            "web" | "webs" => Some(DependencyType::Web),
             "design_plugins" => Some(DependencyType::DesignPlugins),
             "design_soft" => Some(DependencyType::DesignSoft),
-            "model" => Some(DependencyType::Model),
+            "model" | "models" => Some(DependencyType::Model),
             _ => None,
+        }
+    }
+
+    /// 远程清单目录。
+    pub fn remote_dir(self) -> &'static str {
+        match self {
+            DependencyType::Core => "core",
+            DependencyType::Sys => "system",
+            DependencyType::Web => "webs",
+            DependencyType::DesignPlugins => "design_plugins",
+            DependencyType::DesignSoft => "design_soft",
+            DependencyType::Model => "models",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            DependencyType::Core => "核心包",
+            DependencyType::Sys => "系统库",
+            DependencyType::Web => "Web 资源",
+            DependencyType::DesignPlugins => "设计插件",
+            DependencyType::DesignSoft => "设计软件",
+            DependencyType::Model => "模型",
         }
     }
 }
 
-/// 依赖项信息
+/// 依赖项信息。
 #[derive(Debug, Clone)]
 pub struct Dependency {
     pub name: String,
+    /// 去掉 `?` / `optional:` 标记后的声明版本。
     pub version: String,
     pub dep_type: DependencyType,
+    /// 可选依赖：缺失时只提示，不计入失败。
+    pub optional: bool,
+}
+
+impl Dependency {
+    pub fn new(name: impl Into<String>, raw_version: &str, dep_type: DependencyType) -> Self {
+        let (version, optional) = parse_dependency_spec(raw_version);
+        Self {
+            name: name.into(),
+            version,
+            dep_type,
+            optional,
+        }
+    }
+}
+
+/// 解析依赖声明：支持 `?1.0.0`、`1.0.0?`、`optional:1.0.0` 三种可选写法。
+pub fn parse_dependency_spec(raw: &str) -> (String, bool) {
+    let raw = raw.trim();
+    if let Some(rest) = raw.strip_prefix("optional:") {
+        return (rest.trim().to_string(), true);
+    }
+    if let Some(rest) = raw.strip_prefix('?') {
+        return (rest.trim().to_string(), true);
+    }
+    if let Some(rest) = raw.strip_suffix('?') {
+        return (rest.trim().to_string(), true);
+    }
+    (raw.to_string(), false)
 }
 
 /// 读取 dytes.json
@@ -117,58 +170,33 @@ pub fn read_dytes_config() -> Result<DytesConfig> {
     Ok(config)
 }
 
-/// 获取所有依赖
+/// 获取所有依赖（按类型、名称排序，保证解析顺序稳定）。
 pub fn get_all_dependencies(config: &DytesConfig) -> Vec<Dependency> {
     let mut deps = Vec::new();
 
-    for (name, version) in &config.dependencies_core {
-        deps.push(Dependency {
-            name: name.clone(),
-            version: version.clone(),
-            dep_type: DependencyType::Core,
-        });
+    let groups: [(DependencyType, &HashMap<String, String>); 6] = [
+        (DependencyType::Core, &config.dependencies_core),
+        (DependencyType::Sys, &config.dependencies_sys),
+        (DependencyType::Web, &config.dependencies_web),
+        (
+            DependencyType::DesignPlugins,
+            &config.dependencies_design_plugins,
+        ),
+        (DependencyType::DesignSoft, &config.dependencies_design_soft),
+        (DependencyType::Model, &config.dependencies_model),
+    ];
+
+    for (dep_type, map) in groups {
+        for (name, version) in map {
+            deps.push(Dependency::new(name, version, dep_type));
+        }
     }
 
-    for (name, version) in &config.dependencies_sys {
-        deps.push(Dependency {
-            name: name.clone(),
-            version: version.clone(),
-            dep_type: DependencyType::Sys,
-        });
-    }
-
-    for (name, version) in &config.dependencies_web {
-        deps.push(Dependency {
-            name: name.clone(),
-            version: version.clone(),
-            dep_type: DependencyType::Web,
-        });
-    }
-
-    for (name, version) in &config.dependencies_design_plugins {
-        deps.push(Dependency {
-            name: name.clone(),
-            version: version.clone(),
-            dep_type: DependencyType::DesignPlugins,
-        });
-    }
-
-    for (name, version) in &config.dependencies_design_soft {
-        deps.push(Dependency {
-            name: name.clone(),
-            version: version.clone(),
-            dep_type: DependencyType::DesignSoft,
-        });
-    }
-
-    for (name, version) in &config.dependencies_model {
-        deps.push(Dependency {
-            name: name.clone(),
-            version: version.clone(),
-            dep_type: DependencyType::Model,
-        });
-    }
-
+    deps.sort_by(|a, b| {
+        a.dep_type
+            .cmp(&b.dep_type)
+            .then_with(|| a.name.cmp(&b.name))
+    });
     deps
 }
 
@@ -293,4 +321,30 @@ pub fn validate_config(config: &DytesConfig) -> Result<()> {
         anyhow::bail!("配置缺少 'version' 字段");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_optional_dependency_markers() {
+        assert_eq!(parse_dependency_spec("1.0.0"), ("1.0.0".into(), false));
+        assert_eq!(parse_dependency_spec("?1.0.0"), ("1.0.0".into(), true));
+        assert_eq!(parse_dependency_spec("1.0.0?"), ("1.0.0".into(), true));
+        assert_eq!(
+            parse_dependency_spec("optional:^1.0.0"),
+            ("^1.0.0".into(), true)
+        );
+    }
+
+    #[test]
+    fn dependency_type_paths() {
+        assert_eq!(DependencyType::Sys.remote_dir(), "system");
+        assert_eq!(DependencyType::Web.remote_dir(), "webs");
+        assert_eq!(
+            DependencyType::from_name("models"),
+            Some(DependencyType::Model)
+        );
+    }
 }

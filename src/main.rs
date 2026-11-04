@@ -42,7 +42,7 @@ enum Commands {
 
 #[derive(Args)]
 struct InstallArgs {
-    /// 包类型：app/core/sys/web/plugin/design-soft/model
+    /// 包类型：plugin / design-soft / sys / core / web / model（app 请使用 dytes update）
     #[arg(value_name = "TYPE")]
     pkg_type: Option<String>,
     /// 包名（可带 @version）
@@ -100,6 +100,9 @@ struct SelfUpdateArgs {
     /// 同版本也重新下载
     #[arg(long)]
     force: bool,
+    /// 下载来源：auto（S3 优先，CDN 回退）/ cdn / s3
+    #[arg(long, value_name = "auto|cdn|s3", default_value = "auto")]
+    source: String,
     #[arg(long)]
     json: bool,
 }
@@ -114,6 +117,9 @@ struct PublishArgs {
     dry_run: bool,
     #[arg(long)]
     platform: Option<String>,
+    /// 只发布 dytes.json，不上传产物（需求 / 训练类包）
+    #[arg(long = "manifest-only")]
+    manifest_only: bool,
     #[arg(long)]
     force: bool,
     #[arg(long)]
@@ -130,6 +136,9 @@ struct InitArgs {
     version: String,
     #[arg(long)]
     dir: Option<PathBuf>,
+    /// 生成不含 exports / platform-exports 的最小清单
+    #[arg(long = "no-exports")]
+    no_exports: bool,
     #[arg(long)]
     force: bool,
     #[arg(long)]
@@ -318,7 +327,7 @@ fn run_init(args: InitArgs) -> Result<()> {
         )));
     }
     fs::create_dir_all(&dir)?;
-    let manifest = templates::init_manifest(pkg_type, &name, &args.version);
+    let manifest = templates::init_manifest(pkg_type, &name, &args.version, !args.no_exports);
     let uuid = manifest
         .get("uuid")
         .and_then(|value| value.as_str())
@@ -341,40 +350,47 @@ fn run_init(args: InitArgs) -> Result<()> {
 fn run_publish(args: PublishArgs) -> Result<()> {
     let dir = args.dir.unwrap_or(std::env::current_dir()?);
     let config_path = args.config.unwrap_or_else(|| dir.join("dytes.json"));
-    let config = DytesConfig::read(&config_path)?;
+    let config = DytesConfig::read_with(&config_path, args.manifest_only)?;
     let pkg_type = config.package_type()?;
-    let platform = args.platform.unwrap_or_else(platform::current_platform);
+    let platform = args
+        .platform
+        .clone()
+        .unwrap_or_else(platform::current_platform);
     let uuid = config.uuid.as_deref().unwrap_or("");
-    let Some((exports, platform_tag)) = platform::select_exports(&config, &platform) else {
-        return Err(DytesError::config(format!(
-            "当前平台 {platform} 未在 platform-exports 中配置"
-        )));
-    };
-    if exports.is_empty() {
-        return Err(DytesError::config("没有可导出的文件"));
-    }
-    let prefix = format!("{}/{}", package::remote_prefix(pkg_type), config.name);
-    let base = platform::remote_base(&prefix, &config.version, platform_tag);
     let mut plan = Vec::new();
-    for (source, dest) in exports {
-        if dest.starts_with('/')
-            || dest.starts_with('\\')
-            || dest.split(['/', '\\']).any(|part| part == "..")
-        {
-            return Err(DytesError::config(format!("不支持的导出路径: {dest}")));
+    if !args.manifest_only {
+        let Some((exports, platform_tag)) = platform::select_exports(&config, &platform) else {
+            return Err(DytesError::config(format!(
+                "当前平台 {platform} 未在 platform-exports 中配置"
+            )));
+        };
+        if exports.is_empty() {
+            return Err(DytesError::config(
+                "没有可导出的文件；需求 / 训练类包请使用 --manifest-only",
+            ));
         }
-        plan.push(json!({
-            "source": source,
-            "remote": format!("{base}{dest}"),
-            "exists": dir.join(&source).exists(),
-            "checksum": if dir.join(&source).exists() {
-                Some(digest_file(&dir.join(&source)).map_err(|error| {
-                    DytesError::failed(format!("计算校验失败: {error:#}"))
-                })?)
-            } else {
-                None
-            },
-        }));
+        let prefix = format!("{}/{}", package::remote_prefix(pkg_type), config.name);
+        let base = platform::remote_base(&prefix, &config.version, platform_tag);
+        for (source, dest) in exports {
+            if dest.starts_with('/')
+                || dest.starts_with('\\')
+                || dest.split(['/', '\\']).any(|part| part == "..")
+            {
+                return Err(DytesError::config(format!("不支持的导出路径: {dest}")));
+            }
+            plan.push(json!({
+                "source": source,
+                "remote": format!("{base}{dest}"),
+                "exists": dir.join(source.as_str()).exists(),
+                "checksum": if dir.join(source.as_str()).exists() {
+                    Some(digest_file(&dir.join(source.as_str())).map_err(|error| {
+                        DytesError::failed(format!("计算校验失败: {error:#}"))
+                    })?)
+                } else {
+                    None
+                },
+            }));
+        }
     }
     let index = package::packages_index(pkg_type);
     if args.json {
@@ -382,6 +398,7 @@ fn run_publish(args: PublishArgs) -> Result<()> {
             "{}",
             json!({
                 "dry_run": args.dry_run,
+                "manifest_only": args.manifest_only,
                 "type": pkg_type.as_str(),
                 "name": config.name,
                 "uuid": uuid,
@@ -431,7 +448,7 @@ fn run_publish(args: PublishArgs) -> Result<()> {
     if args.dry_run {
         return Ok(());
     }
-    dytes::publish::run::dytes::publish(&config_path, args.force)
+    dytes::publish::run::dytes::publish_with_options(&config_path, args.force, args.manifest_only)
         .map_err(|error| DytesError::failed(format!("{error:#}")))
 }
 
@@ -448,9 +465,24 @@ fn run_install(args: InstallArgs) -> Result<()> {
     let kind = match pkg_type.trim().to_ascii_lowercase().as_str() {
         "plugin" | "plugins" | "design_plugins" | "design-plugins" => DesignKind::Plugin,
         "design-soft" | "design_soft" | "designsoft" => DesignKind::Soft,
+        "sys" | "system" | "core" | "web" | "webs" | "model" | "models" => {
+            return install_dependency(
+                &dir,
+                pkg_type,
+                &name,
+                version.as_deref(),
+                args.offline,
+                args.json,
+            )
+        }
+        "app" | "apps" => {
+            return Err(DytesError::args(
+                "安装应用请使用 dytes update --auto（当前目录的 dytes.json 即应用清单）",
+            ))
+        }
         other => {
-            return Err(DytesError::failed(format!(
-                "install 暂不支持类型 {other}；当前支持 plugin 与 design-soft"
+            return Err(DytesError::args(format!(
+                "install 暂不支持类型 {other}；支持 plugin / design-soft / sys / core / web / model"
             )))
         }
     };
@@ -475,6 +507,119 @@ fn run_install(args: InstallArgs) -> Result<()> {
         );
     }
 
+    Ok(())
+}
+
+/// `dependencies-*` 键名。
+fn dependency_key(pkg_type: &str) -> Option<&'static str> {
+    match pkg_type.trim().to_ascii_lowercase().as_str() {
+        "core" => Some("dependencies-core"),
+        "sys" | "system" => Some("dependencies-sys"),
+        "web" | "webs" => Some("dependencies-web"),
+        "model" | "models" => Some("dependencies-model"),
+        _ => None,
+    }
+}
+
+/// 远程清单目录前缀。
+fn dependency_remote_prefix(pkg_type: &str) -> Option<&'static str> {
+    match pkg_type.trim().to_ascii_lowercase().as_str() {
+        "core" => Some("core"),
+        "sys" | "system" => Some("system"),
+        "web" | "webs" => Some("webs"),
+        "model" | "models" => Some("models"),
+        _ => None,
+    }
+}
+
+async fn fetch_dependency_version(pkg_type: &str, name: &str) -> anyhow::Result<String> {
+    let prefix = dependency_remote_prefix(pkg_type)
+        .ok_or_else(|| anyhow::anyhow!("未知包类型: {pkg_type}"))?;
+    let path = format!("{}/{}/dytes.json", prefix, name);
+    let text = dytes::update::utils::loader::fetch_text(&path).await?;
+    let value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| anyhow::anyhow!("解析 {path} 失败: {e}"))?;
+    value
+        .get("version")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("{path} 缺少 version"))
+}
+
+/// 安装 sys / core / web / model 依赖：写入当前清单后执行 update。
+fn install_dependency(
+    dir: &std::path::Path,
+    pkg_type: &str,
+    name: &str,
+    version: Option<&str>,
+    offline: bool,
+    json: bool,
+) -> Result<()> {
+    let key = dependency_key(pkg_type)
+        .ok_or_else(|| DytesError::args(format!("install 暂不支持类型 {pkg_type}")))?;
+    let manifest_path = dir.join("dytes.json");
+    if !manifest_path.exists() {
+        return Err(DytesError::config(format!(
+            "{} 不存在；请先执行 dytes init 或在应用目录运行",
+            manifest_path.display()
+        )));
+    }
+
+    let text = fs::read_to_string(&manifest_path)
+        .map_err(|e| DytesError::config(format!("读取 {} 失败: {e}", manifest_path.display())))?;
+    let mut value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| DytesError::config(format!("解析 dytes.json 失败: {e}")))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| DytesError::config("dytes.json 不是 JSON 对象"))?;
+
+    let version = match version {
+        Some(version) => version.to_string(),
+        None if offline => {
+            return Err(DytesError::args(
+                "离线安装需要显式版本：dytes install <type> <name>@<version> --offline",
+            ))
+        }
+        None => {
+            let runtime = tokio::runtime::Runtime::new()
+                .map_err(|e| DytesError::failed(format!("创建异步运行时失败: {e}")))?;
+            runtime
+                .block_on(fetch_dependency_version(pkg_type, name))
+                .map_err(|e| DytesError::failed(format!("获取线上版本失败: {e:#}")))?
+        }
+    };
+
+    let entry = object
+        .entry(key.to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    let deps = entry
+        .as_object_mut()
+        .ok_or_else(|| DytesError::config(format!("{key} 不是对象")))?;
+    deps.insert(name.to_string(), serde_json::Value::String(version.clone()));
+    fs::write(&manifest_path, serde_json::to_string_pretty(&value)?)
+        .map_err(|e| DytesError::config(format!("写入 {} 失败: {e}", manifest_path.display())))?;
+
+    println!("已写入 {}: {}@{}；开始更新依赖", key, name, version);
+
+    let runtime = tokio::runtime::Runtime::new()
+        .map_err(|e| DytesError::failed(format!("创建异步运行时失败: {e}")))?;
+    runtime
+        .block_on(dytes::update::run::dytes::init_dytes_with_options(
+            None, !offline,
+        ))
+        .map_err(|e| DytesError::failed(format!("更新失败: {e:#}")))?;
+
+    if json {
+        println!(
+            "{}",
+            json!({
+                "type": pkg_type,
+                "name": name,
+                "version": version,
+                "dependency_key": key,
+            })
+        );
+    }
     Ok(())
 }
 
@@ -519,11 +664,13 @@ fn run_update(args: UpdateArgs) -> Result<()> {
 }
 
 fn run_self_update(args: SelfUpdateArgs) -> Result<()> {
+    let source = dytes::update::run::self_update::UpdateSource::parse(&args.source)
+        .ok_or_else(|| DytesError::args("--source 只支持 auto / cdn / s3"))?;
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|e| DytesError::failed(format!("创建异步运行时失败: {e}")))?;
     runtime
         .block_on(dytes::update::run::self_update::run(
-            args.check, args.force, args.json,
+            args.check, args.force, args.json, source,
         ))
         .map_err(|e| DytesError::failed(format!("自更新失败: {e:#}")))?;
     Ok(())

@@ -339,6 +339,12 @@ jobs:
           set -euo pipefail
           version=$(node -p "require('./dytes.json').version")
           base="${DYTES_PACKAGES_BASE:-https://packages.funxdata.com/core/dytes}"
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [ -n "${GITHUB_REF_NAME:-}" ] && [ "$tag_version" != "$version" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} 与 dytes.json 版本 ${version} 不一致"
+            exit 1
+          fi
+          echo "版本: $version（tag: ${GITHUB_REF_NAME:-本地}）"
 
           check_status() {
             local url="$1"
@@ -366,6 +372,9 @@ jobs:
             check_status "$base/latest/$platform/$file.sha256?t=$(date +%s)"
           done
 
+          echo "检查版本化清单..."
+          check_status "$base/$version/dytes.json?t=$(date +%s)"
+
           echo "检查 dytes.json 内容..."
           manifest_ok=false
           for attempt in $(seq 1 8); do
@@ -379,7 +388,8 @@ jobs:
             sleep 10
           done
           if [ "$manifest_ok" != "true" ]; then
-            echo "::warning::dytes.json 仍返回旧版本（CDN 缓存）。产物已上传，self-update 会在缓存过期或手动刷新 core/dytes/dytes.json 后看到 $version。"
+            echo "::error::dytes.json 仍返回旧版本（CDN 缓存），发布自检失败。请刷新 core/dytes/dytes.json 后重试。"
+            exit 1
           fi
 
           echo "检查 version.js 内容..."
@@ -395,7 +405,8 @@ jobs:
             sleep 10
           done
           if [ "$script_ok" != "true" ]; then
-            echo "::warning::version.js 仍返回旧版本（CDN 缓存）。官网会继续显示旧版本，直到缓存过期或手动刷新 core/dytes/latest/version.js。"
+            echo "::error::version.js 仍返回旧版本（CDN 缓存），发布自检失败。请刷新 core/dytes/latest/version.js 后重试。"
+            exit 1
           fi
 
   notify-website:

@@ -40,7 +40,11 @@ fn startup_mode() -> bool {
 }
 
 fn fetch_retries() -> u32 {
-    if startup_mode() { 1 } else { FETCH_RETRIES }
+    if startup_mode() {
+        1
+    } else {
+        FETCH_RETRIES
+    }
 }
 
 fn s3_settings() -> ResolvedS3 {

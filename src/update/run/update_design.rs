@@ -208,6 +208,7 @@ pub async fn update_design_info(
         remote_info.uuid.as_deref(),
         &name,
         &remote_info.version,
+        Some(&declared_version),
         remote_dir,
         loader,
     )?;

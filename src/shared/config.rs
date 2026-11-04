@@ -91,15 +91,25 @@ fn default_auto_update() -> bool {
 
 impl DytesConfig {
     pub fn read(path: &Path) -> Result<Self> {
+        Self::read_with(path, false)
+    }
+
+    /// 读取清单；`allow_no_exports` 为 true 时允许“仅清单”包
+    /// （需求 / 训练类项目不产出二进制）。
+    pub fn read_with(path: &Path, allow_no_exports: bool) -> Result<Self> {
         let text = fs::read_to_string(path)
             .map_err(|e| DytesError::config(format!("读取 {} 失败: {e}", path.display())))?;
         let config: Self = serde_json::from_str(&text)
             .map_err(|e| DytesError::config(format!("解析 {} 失败: {e}", path.display())))?;
-        config.validate()?;
+        config.validate_with_options(allow_no_exports)?;
         Ok(config)
     }
 
     pub fn validate(&self) -> Result<()> {
+        self.validate_with_options(false)
+    }
+
+    pub fn validate_with_options(&self, allow_no_exports: bool) -> Result<()> {
         if self.name.trim().is_empty() {
             return Err(DytesError::config("dytes.json 缺少 name"));
         }
@@ -109,7 +119,7 @@ impl DytesConfig {
         if self.pkg_type.as_deref().unwrap_or("").trim().is_empty() {
             return Err(DytesError::config("dytes.json 缺少 type"));
         }
-        if self.exports.is_empty() && self.platform_exports.is_empty() {
+        if !allow_no_exports && self.exports.is_empty() && self.platform_exports.is_empty() {
             return Err(DytesError::config(
                 "dytes.json 缺少 exports / platform-exports",
             ));

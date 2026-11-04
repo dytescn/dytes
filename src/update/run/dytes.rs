@@ -1,12 +1,282 @@
 use super::update_setup::run_all_init_scripts;
 use super::{update_app, update_design, update_model, update_os, update_sys, update_webs};
-use crate::update::utils::dytes::{print_config_info, read_dytes_config, DytesConfig};
+use crate::update::utils::dytes::{
+    get_all_dependencies, print_config_info, read_dytes_config, Dependency, DependencyType,
+    DytesConfig,
+};
 use crate::update::utils::env::get_app_dir;
 use crate::update::utils::lock::{
     get_package_version_from_lock, read_lock, remove_package_from_lock,
 };
 use crate::update::utils::version::check_version;
 use anyhow::{anyhow, Result};
+use std::collections::{BTreeMap, HashSet, VecDeque};
+
+/// 依赖图节点：类型 + 包名。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+struct DepKey {
+    dep_type: DependencyType,
+    name: String,
+}
+
+impl DepKey {
+    fn new(dep: &Dependency) -> Self {
+        Self {
+            dep_type: dep.dep_type,
+            name: dep.name.clone(),
+        }
+    }
+
+    fn display(&self) -> String {
+        format!("{}/{}", self.dep_type.remote_dir(), self.name)
+    }
+}
+
+/// 解析后的依赖计划：按“依赖在前”的顺序执行。
+#[derive(Default)]
+struct DependencyPlan {
+    order: Vec<Dependency>,
+    warnings: Vec<String>,
+    failures: Vec<String>,
+}
+
+enum ConstraintIssue {
+    Warn(String),
+    Error(String),
+}
+
+fn version_constraint_issue(dep: &Dependency, remote_version: &str) -> Option<ConstraintIssue> {
+    let declared = dep.version.trim();
+    if declared.is_empty() || declared == "*" || declared == "latest" {
+        return None;
+    }
+    let remote = semver::Version::parse(remote_version).ok()?;
+
+    if let Ok(exact) = semver::Version::parse(declared) {
+        if exact > remote {
+            return Some(ConstraintIssue::Error(format!(
+                "{} {} 声明 {}，线上只有 {}（无法满足声明版本）",
+                dep.dep_type.label(),
+                dep.name,
+                exact,
+                remote
+            )));
+        }
+        if exact < remote {
+            return Some(ConstraintIssue::Warn(format!(
+                "{} {} 声明 {}，线上为 {}；按线上版本安装（锁文件会记录声明版本）",
+                dep.dep_type.label(),
+                dep.name,
+                exact,
+                remote
+            )));
+        }
+        return None;
+    }
+
+    match semver::VersionReq::parse(declared) {
+        Ok(req) if !req.matches(&remote) => Some(ConstraintIssue::Error(format!(
+            "{} {} 声明范围 {}，线上版本 {} 不满足",
+            dep.dep_type.label(),
+            dep.name,
+            declared,
+            remote
+        ))),
+        Ok(_) => None,
+        Err(_) => Some(ConstraintIssue::Warn(format!(
+            "{} {} 的版本声明 '{}' 无法解析，忽略约束",
+            dep.dep_type.label(),
+            dep.name,
+            declared
+        ))),
+    }
+}
+
+async fn fetch_remote_dep_manifest(dep: &Dependency) -> Result<DytesConfig> {
+    let path = format!("{}/{}/dytes.json", dep.dep_type.remote_dir(), dep.name);
+    let text = crate::update::utils::loader::fetch_text(&path).await?;
+    serde_json::from_str(&text).map_err(|error| anyhow!("解析 {} 失败: {}", path, error))
+}
+
+/// 展开传递依赖并做拓扑排序；环、缺失与版本约束都在这里处理。
+async fn plan_dependencies(config: &DytesConfig, sync_online: bool) -> Result<DependencyPlan> {
+    let roots = get_all_dependencies(config);
+    if !sync_online {
+        return Ok(DependencyPlan {
+            order: roots,
+            ..Default::default()
+        });
+    }
+
+    let mut nodes: BTreeMap<DepKey, Dependency> = BTreeMap::new();
+    let mut edges: BTreeMap<DepKey, Vec<DepKey>> = BTreeMap::new();
+    let mut required: HashSet<DepKey> = HashSet::new();
+    let mut queue: VecDeque<(Dependency, bool)> =
+        roots.into_iter().map(|dep| (dep, true)).collect();
+    let mut warnings = Vec::new();
+    let mut failures = Vec::new();
+
+    while let Some((dep, is_root)) = queue.pop_front() {
+        let key = DepKey::new(&dep);
+        if is_root {
+            required.insert(key.clone());
+        }
+        if nodes.contains_key(&key) {
+            continue;
+        }
+
+        match fetch_remote_dep_manifest(&dep).await {
+            Ok(remote) => {
+                if let Some(issue) = version_constraint_issue(&dep, &remote.version) {
+                    match issue {
+                        ConstraintIssue::Warn(message) => warnings.push(message),
+                        ConstraintIssue::Error(message) => {
+                            if is_root {
+                                failures.push(message);
+                            } else {
+                                warnings.push(message);
+                            }
+                        }
+                    }
+                }
+
+                let children = get_all_dependencies(&remote);
+                edges.insert(key.clone(), children.iter().map(DepKey::new).collect());
+                nodes.insert(key, dep);
+                for child in children {
+                    queue.push_back((child, false));
+                }
+            }
+            Err(error) => {
+                let message = format!("{} {}: {error:#}", dep.dep_type.label(), dep.name);
+                if (is_root || required.contains(&key)) && !dep.optional {
+                    failures.push(message);
+                } else {
+                    warnings.push(format!(
+                        "跳过 {}（上游未发布或不可达；声明为可选或传递依赖）",
+                        message
+                    ));
+                }
+            }
+        }
+    }
+
+    let order = topo_sort(&nodes, &edges)?;
+    let mut deps = Vec::new();
+    for key in order {
+        if let Some(dep) = nodes.get(&key) {
+            deps.push(dep.clone());
+        }
+    }
+
+    Ok(DependencyPlan {
+        order: deps,
+        warnings,
+        failures,
+    })
+}
+
+/// 迭代式 DFS 拓扑排序；`Gray` 节点再次被访问即表示存在环。
+fn topo_sort(
+    nodes: &BTreeMap<DepKey, Dependency>,
+    edges: &BTreeMap<DepKey, Vec<DepKey>>,
+) -> Result<Vec<DepKey>> {
+    let mut color: BTreeMap<DepKey, u8> = nodes.keys().cloned().map(|key| (key, 0)).collect();
+    let mut order = Vec::new();
+
+    for start in nodes.keys() {
+        if color.get(start).copied().unwrap_or(0) != 0 {
+            continue;
+        }
+        let mut stack: Vec<(DepKey, usize)> = vec![(start.clone(), 0)];
+        color.insert(start.clone(), 1);
+
+        while let Some((key, index)) = stack.last().cloned() {
+            let children = edges.get(&key).cloned().unwrap_or_default();
+            if index < children.len() {
+                if let Some(top) = stack.last_mut() {
+                    top.1 += 1;
+                }
+                let child = children[index].clone();
+                match color.get(&child).copied().unwrap_or(0) {
+                    0 => {
+                        color.insert(child.clone(), 1);
+                        stack.push((child, 0));
+                    }
+                    1 => {
+                        let chain = stack
+                            .iter()
+                            .map(|(node, _)| node.display())
+                            .collect::<Vec<_>>()
+                            .join(" -> ");
+                        return Err(anyhow!("依赖存在环: {} -> {}", chain, child.display()));
+                    }
+                    _ => {}
+                }
+            } else {
+                color.insert(key.clone(), 2);
+                order.push(key);
+                stack.pop();
+            }
+        }
+    }
+
+    Ok(order)
+}
+
+/// 按依赖类型调用对应的更新函数。
+async fn update_one_dependency(
+    dep: &Dependency,
+    sys_init_results: &mut Vec<update_sys::SysUpdateResult>,
+    web_init_results: &mut Vec<update_webs::WebUpdateResult>,
+) -> Result<()> {
+    match dep.dep_type {
+        DependencyType::Core => {
+            update_os::update_os_info(dep.name.clone(), dep.version.clone()).await
+        }
+        DependencyType::Sys => {
+            if let Some(result) =
+                update_sys::update_sys_info(dep.name.clone(), dep.version.clone()).await?
+            {
+                sys_init_results.push(result);
+            }
+            Ok(())
+        }
+        DependencyType::Web => {
+            if let Some(result) =
+                update_webs::update_webs_info(dep.name.clone(), dep.version.clone()).await?
+            {
+                web_init_results.push(result);
+            }
+            Ok(())
+        }
+        DependencyType::DesignPlugins => {
+            update_design::update_design_info(
+                dep.name.clone(),
+                dep.version.clone(),
+                update_design::DesignKind::Plugin,
+                false,
+                None,
+            )
+            .await?;
+            Ok(())
+        }
+        DependencyType::DesignSoft => {
+            update_design::update_design_info(
+                dep.name.clone(),
+                dep.version.clone(),
+                update_design::DesignKind::Soft,
+                false,
+                None,
+            )
+            .await?;
+            Ok(())
+        }
+        DependencyType::Model => {
+            update_model::update_model_info(dep.name.clone(), dep.version.clone()).await
+        }
+    }
+}
 
 /// 进度回调类型
 pub type ProgressCallback = Box<dyn Fn(f32, &str) + Send + Sync>;
@@ -430,6 +700,39 @@ pub async fn check_report(sync_online: bool, types: Option<&[String]>) -> Result
         }
     }
 
+    // 展开传递依赖：把“已声明但不在本地清单 / 锁文件”的包也列出来，
+    // 便于在安装前发现 chatllm 之类的依赖缺口。
+    if sync_online {
+        match plan_dependencies(&config, true).await {
+            Ok(plan) => {
+                for dep in plan.order {
+                    if !selected(dep.dep_type.as_str()) {
+                        continue;
+                    }
+                    let name = dep.name.clone();
+                    let pkg_type = dep.dep_type.as_str();
+                    if updates.iter().any(|item| {
+                        item.get("type").and_then(|v| v.as_str()) == Some(pkg_type)
+                            && item.get("name").and_then(|v| v.as_str()) == Some(name.as_str())
+                    }) {
+                        continue;
+                    }
+                    let local = local_version(&name);
+                    updates.push(json!({
+                        "type": pkg_type,
+                        "name": name,
+                        "local_version": local,
+                        "remote_version": serde_json::Value::Null,
+                        "declared": dep.version,
+                        "needs_update": local.is_none(),
+                        "source": "transitive",
+                    }));
+                }
+            }
+            Err(error) => println!("  展开传递依赖失败（继续检查已声明依赖）: {error:#}"),
+        }
+    }
+
     let count = updates
         .iter()
         .filter(|item| {
@@ -537,8 +840,12 @@ pub async fn init_dytes_with_options(
     if let Err(e) =
         update_app::update_app_info(config.name.clone(), config.version.clone(), sync_online).await
     {
-        println!("  应用自身更新失败: {}", e);
-        failures.push(format!("应用 {}: {}", config.name, e));
+        if is_missing_remote_manifest(&e) {
+            println!("  应用自身尚未发布，跳过应用更新: {e}");
+        } else {
+            println!("  应用自身更新失败: {}", e);
+            failures.push(format!("应用 {}: {}", config.name, e));
+        }
     } else {
         match read_dytes_config() {
             Ok(new_config) => config = new_config,
@@ -546,181 +853,55 @@ pub async fn init_dytes_with_options(
         }
     }
 
-    let core_deps: Vec<_> = config.dependencies_core.iter().collect();
-    let sys_deps: Vec<_> = config.dependencies_sys.iter().collect();
-    let web_deps: Vec<_> = config.dependencies_web.iter().collect();
-    let design_plugins_deps: Vec<_> = config.dependencies_design_plugins.iter().collect();
-    let design_soft_deps: Vec<_> = config.dependencies_design_soft.iter().collect();
-    let model_deps: Vec<_> = config.dependencies_model.iter().collect();
+    let plan = match plan_dependencies(&config, sync_online).await {
+        Ok(plan) => plan,
+        Err(error) => {
+            println!("  依赖解析失败: {error:#}");
+            failures.push(format!("依赖解析: {error:#}"));
+            DependencyPlan::default()
+        }
+    };
+    for warning in &plan.warnings {
+        println!("  警告: {}", warning);
+    }
+    failures.extend(plan.failures);
 
-    let total_deps = (core_deps.len()
-        + sys_deps.len()
-        + web_deps.len()
-        + design_plugins_deps.len()
-        + design_soft_deps.len()
-        + model_deps.len())
-    .max(1);
+    let total_deps = plan.order.len().max(1);
     let mut completed = 0usize;
 
     if sync_online {
-        println!("\n开始检查依赖更新（以线上版本为准）...");
+        println!(
+            "
+开始检查依赖更新（以线上版本为准；声明版本用于约束校验）..."
+        );
     } else {
         println!("离线模式：按本地声明版本检查依赖更新...");
     }
 
-    // 2. 核心依赖更新
-    if !core_deps.is_empty() {
-        update_progress(&progress_callback, 10.0, "检查核心依赖更新...");
-        for (name, version) in core_deps {
-            if sync_online || need_update(name, version) {
-                if let Err(e) = update_os::update_os_info(name.clone(), version.clone()).await {
-                    println!("  更新 {} 失败: {}", name, e);
-                    failures.push(format!("core {}: {}", name, e));
-                }
-            } else {
-                println!("  离线模式：跳过 {} (本地声明 v{})", name, version);
-            }
-            completed += 1;
-            let progress = 10.0 + (completed as f32 / total_deps as f32) * 60.0;
-            update_progress(&progress_callback, progress, &format!("更新核心: {}", name));
-        }
-    }
-
-    // 3. 系统库更新
     let mut sys_init_results: Vec<update_sys::SysUpdateResult> = Vec::new();
-    if !sys_deps.is_empty() {
-        update_progress(&progress_callback, 70.0, "检查系统库更新...");
-        for (name, version) in sys_deps {
-            if sync_online || need_update(name, version) {
-                match update_sys::update_sys_info(name.clone(), version.clone()).await {
-                    Ok(Some(result)) => sys_init_results.push(result),
-                    Ok(None) => {}
-                    Err(e) => {
-                        println!("  更新 {} 失败: {}", name, e);
-                        failures.push(format!("sys {}: {}", name, e));
-                    }
-                }
-            } else {
-                println!("  离线模式：跳过 {} (本地声明 v{})", name, version);
-            }
-            completed += 1;
-            let progress = 70.0 + (completed as f32 / total_deps as f32) * 15.0;
-            update_progress(
-                &progress_callback,
-                progress,
-                &format!("更新系统库: {}", name),
-            );
-        }
-    }
+    let mut web_init_results: Vec<update_webs::WebUpdateResult> = Vec::new();
 
-    // 4. Web 资源更新 - 收集需要执行 init 的包
-    let mut web_init_results = Vec::new();
-    if !web_deps.is_empty() {
-        update_progress(&progress_callback, 85.0, "检查 Web 资源更新...");
-        for (name, version) in web_deps {
-            if sync_online || need_update(name, version) {
-                match update_webs::update_webs_info(name.clone(), version.clone()).await {
-                    Ok(Some(result)) => {
-                        web_init_results.push(result);
-                    }
-                    Ok(None) => {
-                        println!("  {} 无需执行 init 脚本", name);
-                    }
-                    Err(e) => {
-                        println!("  更新 {} 失败: {}", name, e);
-                        failures.push(format!("web {}: {}", name, e));
-                    }
-                }
-            } else {
-                println!("  离线模式：跳过 {} (本地声明 v{})", name, version);
-            }
+    for dep in &plan.order {
+        if !sync_online && !need_update(&dep.name, &dep.version) {
+            println!("  离线模式：跳过 {} (本地声明 v{})", dep.name, dep.version);
             completed += 1;
-            let progress = 85.0 + (completed as f32 / total_deps as f32) * 10.0;
-            update_progress(
-                &progress_callback,
-                progress,
-                &format!("更新 Web 资源: {}", name),
-            );
+            continue;
         }
-    }
 
-    // 5. 设计插件更新
-    if !design_plugins_deps.is_empty() {
-        update_progress(&progress_callback, 95.0, "检查设计插件更新...");
-        for (name, version) in design_plugins_deps {
-            if sync_online || need_update(name, version) {
-                if let Err(e) = update_design::update_design_info(
-                    name.clone(),
-                    version.clone(),
-                    update_design::DesignKind::Plugin,
-                    false,
-                    None,
-                )
-                .await
-                {
-                    println!("  更新 {} 失败: {}", name, e);
-                    failures.push(format!("design_plugins {}: {}", name, e));
-                }
-            } else {
-                println!("  离线模式：跳过 {} (本地声明 v{})", name, version);
-            }
-            completed += 1;
-            let progress = 95.0 + (completed as f32 / total_deps as f32) * 5.0;
-            update_progress(
-                &progress_callback,
-                progress,
-                &format!("更新设计插件: {}", name),
-            );
+        if let Err(error) =
+            update_one_dependency(dep, &mut sys_init_results, &mut web_init_results).await
+        {
+            println!("  更新 {} 失败: {error:#}", dep.name);
+            failures.push(format!("{} {}: {error:#}", dep.dep_type.as_str(), dep.name));
         }
-    }
 
-    // 6. 设计软件更新
-    if !design_soft_deps.is_empty() {
-        update_progress(&progress_callback, 95.0, "检查设计软件更新...");
-        for (name, version) in design_soft_deps {
-            if sync_online || need_update(name, version) {
-                if let Err(e) = update_design::update_design_info(
-                    name.clone(),
-                    version.clone(),
-                    update_design::DesignKind::Soft,
-                    false,
-                    None,
-                )
-                .await
-                {
-                    println!("  更新 {} 失败: {}", name, e);
-                    failures.push(format!("design_soft {}: {}", name, e));
-                }
-            } else {
-                println!("  离线模式：跳过 {} (本地声明 v{})", name, version);
-            }
-            completed += 1;
-            let progress = 95.0 + (completed as f32 / total_deps as f32) * 5.0;
-            update_progress(
-                &progress_callback,
-                progress,
-                &format!("更新设计软件: {}", name),
-            );
-        }
-    }
-
-    // 6.5 模型更新（模型是 chatllm 等组件的强制关联文件）
-    if !model_deps.is_empty() {
-        update_progress(&progress_callback, 95.0, "检查模型更新...");
-        for (name, version) in model_deps {
-            if sync_online || need_update(name, version) {
-                if let Err(e) = update_model::update_model_info(name.clone(), version.clone()).await
-                {
-                    println!("  更新模型 {} 失败: {}", name, e);
-                    failures.push(format!("model {}: {}", name, e));
-                }
-            } else {
-                println!("  离线模式：跳过模型 {} (本地声明 v{})", name, version);
-            }
-            completed += 1;
-            let progress = 95.0 + (completed as f32 / total_deps as f32) * 5.0;
-            update_progress(&progress_callback, progress, &format!("更新模型: {}", name));
-        }
+        completed += 1;
+        let progress = 10.0 + (completed as f32 / total_deps as f32) * 85.0;
+        update_progress(
+            &progress_callback,
+            progress,
+            &format!("更新{}: {}", dep.dep_type.label(), dep.name),
+        );
     }
 
     // 7. sys 包与 web 包的 init 脚本统一执行（sys 先执行，负责数据库初始化）
@@ -774,6 +955,16 @@ pub async fn init_dytes_with_options(
     }
 }
 
+/// 远程清单不存在（尚未发布）时不应作为更新失败。
+fn is_missing_remote_manifest(error: &anyhow::Error) -> bool {
+    let text = format!("{error:#}").to_lowercase();
+    text.contains("nosuchkey")
+        || text.contains("not found")
+        || text.contains("notfound")
+        || text.contains("404")
+        || text.contains("下载 app/")
+}
+
 fn update_progress(callback: &Option<ProgressCallback>, progress: f32, status: &str) {
     if let Some(cb) = callback {
         cb(progress, status);
@@ -783,4 +974,80 @@ fn update_progress(callback: &Option<ProgressCallback>, progress: f32, status: &
 
 pub fn load_config() -> Result<DytesConfig> {
     read_dytes_config()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dep(dep_type: DependencyType, name: &str, version: &str) -> Dependency {
+        Dependency::new(name, version, dep_type)
+    }
+
+    fn key(dep: &Dependency) -> DepKey {
+        DepKey::new(dep)
+    }
+
+    #[test]
+    fn topo_sort_puts_dependencies_first() {
+        let chatllm = dep(DependencyType::Sys, "chatllm", "1.0.9");
+        let database = dep(DependencyType::Sys, "database", "1.0.2");
+        let info = dep(DependencyType::Sys, "info_lib", "0.1.0");
+
+        let mut nodes = BTreeMap::new();
+        for item in [&chatllm, &database, &info] {
+            nodes.insert(key(item), item.clone());
+        }
+        let mut edges = BTreeMap::new();
+        edges.insert(key(&chatllm), vec![key(&database), key(&info)]);
+        edges.insert(key(&database), vec![]);
+        edges.insert(key(&info), vec![key(&database)]);
+
+        let order = topo_sort(&nodes, &edges).unwrap();
+        let position = |name: &str| {
+            order
+                .iter()
+                .position(|item| item.name == name)
+                .expect("missing node")
+        };
+        assert!(position("database") < position("info_lib"));
+        assert!(position("info_lib") < position("chatllm"));
+    }
+
+    #[test]
+    fn topo_sort_reports_cycle() {
+        let a = dep(DependencyType::Sys, "a", "1.0.0");
+        let b = dep(DependencyType::Sys, "b", "1.0.0");
+        let mut nodes = BTreeMap::new();
+        nodes.insert(key(&a), a.clone());
+        nodes.insert(key(&b), b.clone());
+        let mut edges = BTreeMap::new();
+        edges.insert(key(&a), vec![key(&b)]);
+        edges.insert(key(&b), vec![key(&a)]);
+
+        let error = topo_sort(&nodes, &edges).unwrap_err().to_string();
+        assert!(error.contains("依赖存在环"), "{}", error);
+        assert!(error.contains("a") && error.contains("b"), "{}", error);
+    }
+
+    #[test]
+    fn version_constraints_report_mismatch() {
+        let range = dep(DependencyType::Sys, "info_lib", "^0.2.0");
+        assert!(matches!(
+            version_constraint_issue(&range, "0.1.1"),
+            Some(ConstraintIssue::Error(_))
+        ));
+
+        let exact_old = dep(DependencyType::Sys, "info_lib", "0.1.0");
+        assert!(matches!(
+            version_constraint_issue(&exact_old, "0.1.1"),
+            Some(ConstraintIssue::Warn(_))
+        ));
+
+        let exact_new = dep(DependencyType::Sys, "info_lib", "0.2.0");
+        assert!(matches!(
+            version_constraint_issue(&exact_new, "0.1.1"),
+            Some(ConstraintIssue::Error(_))
+        ));
+    }
 }

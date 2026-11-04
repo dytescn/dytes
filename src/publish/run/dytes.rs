@@ -74,10 +74,12 @@ fn plan_after_read_error(
     }
 
     match listed {
-        Ok(keys) if keys.iter().any(|key| key == packages_remote_path) => IndexPlan::Abort(format!(
-            "读取远程 {} 失败（对象存在）: {}。为避免覆盖现有包索引，发布已中止。",
-            packages_remote_path, read_error
-        )),
+        Ok(keys) if keys.iter().any(|key| key == packages_remote_path) => {
+            IndexPlan::Abort(format!(
+                "读取远程 {} 失败（对象存在）: {}。为避免覆盖现有包索引，发布已中止。",
+                packages_remote_path, read_error
+            ))
+        }
         Ok(_) => IndexPlan::CreateNew,
         Err(_list_err) if force => IndexPlan::CreateNew,
         Err(list_err) => IndexPlan::Abort(format!(
@@ -229,6 +231,12 @@ fn ensure_manifest_uuid(json_path: &Path, raw: &str) -> Result<String> {
 /// 只有所有文件都上传成功后，才把新版本写进 packages.json，
 /// 避免客户端在文件尚未上传完成时看到新版本。
 pub fn publish(json_path: &Path, force: bool) -> Result<()> {
+    publish_with_options(json_path, force, false)
+}
+
+/// 发布包；`manifest_only = true` 时只上传 `dytes.json` 与索引，
+/// 用于需求 / 训练类“无产物包”。
+pub fn publish_with_options(json_path: &Path, force: bool, manifest_only: bool) -> Result<()> {
     println!("读取配置文件...");
 
     // 1. 读取 dytes.json
@@ -266,10 +274,15 @@ pub fn publish(json_path: &Path, force: bool) -> Result<()> {
         serde_json::from_str(&manifest_text).with_context(|| "解析 dytes.json 失败")?;
 
     let platform = crate::publish::utils::platform::current_platform();
-    let Some((exports, platform_tag)) =
-        crate::publish::utils::platform::select_exports(&config, &platform)
-    else {
-        bail!("当前平台 '{}' 未在 platform-exports 中配置", platform);
+    let (exports, platform_tag) = if manifest_only {
+        (HashMap::new(), None)
+    } else {
+        let Some((exports, platform_tag)) =
+            crate::publish::utils::platform::select_exports(&config, &platform)
+        else {
+            bail!("当前平台 '{}' 未在 platform-exports 中配置", platform);
+        };
+        (exports.clone(), platform_tag)
     };
 
     println!("  名称: {}", name);
@@ -278,6 +291,9 @@ pub fn publish(json_path: &Path, force: bool) -> Result<()> {
     println!("  类型: {}", pkg_type);
     println!("  平台: {}", platform);
     println!("  导出文件数: {}", exports.len());
+    if manifest_only {
+        println!("  模式: 仅清单（不上传产物）");
+    }
     println!();
 
     // 3. 确定远程路径
@@ -380,6 +396,20 @@ pub fn publish(json_path: &Path, force: bool) -> Result<()> {
         bail!("dytes.json 上传失败，已中止发布");
     }
     println!("  dytes.json 上传成功（{} 个文件校验）", checksums.len());
+
+    // 5.1 同时发布版本化清单，供 `dytes update --pinned` / 发布自检读取。
+    let versioned_manifest_path = format!("{}/{}/dytes.json", remote_prefix, version);
+    if !upload_bytes(&manifest_bytes, bucket, &versioned_manifest_path) {
+        bail!("版本化 dytes.json 上传失败，已中止发布");
+    }
+    println!("  版本化清单: {}", versioned_manifest_path);
+    if let Some(tag) = platform_tag {
+        let platform_manifest_path = format!("{}{}dytes.json", base_path, tag);
+        if !upload_bytes(&manifest_bytes, bucket, &platform_manifest_path) {
+            bail!("平台版本化 dytes.json 上传失败，已中止发布");
+        }
+        println!("  平台清单: {}", platform_manifest_path);
+    }
     println!();
 
     // 6. 最后更新 packages.json，把版本指向已经上传完成的文件

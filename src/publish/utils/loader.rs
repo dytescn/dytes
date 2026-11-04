@@ -312,11 +312,8 @@ fn upload_to_s3(file_content: &[u8], bucket_name: &str, object_name: &str) -> bo
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let tmp = std::env::temp_dir().join(format!(
-        "dytes-upload-{}-{}.tmp",
-        std::process::id(),
-        nonce
-    ));
+    let tmp =
+        std::env::temp_dir().join(format!("dytes-upload-{}-{}.tmp", std::process::id(), nonce));
     if let Err(e) = fs::write(&tmp, file_content) {
         eprintln!("  S3上传失败（写临时文件）: {}", e);
         return false;

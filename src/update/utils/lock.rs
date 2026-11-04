@@ -10,6 +10,9 @@ pub struct PackageLock {
     #[serde(default)]
     pub uuid: Option<String>,
     pub version: String,
+    /// 清单声明的版本（可能是范围），用于区分“声明”与“实际安装”。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared: Option<String>,
     #[serde(rename = "type")]
     pub pkg_type: String,
     pub loader: Vec<Vec<String>>,
@@ -51,6 +54,7 @@ pub fn update_package_in_lock(
     uuid: Option<&str>,
     name: &str,
     version: &str,
+    declared: Option<&str>,
     pkg_type: &str,
     loader: Vec<Vec<String>>,
 ) -> Result<()> {
@@ -60,6 +64,10 @@ pub fn update_package_in_lock(
         name: name.to_string(),
         uuid: uuid.map(str::to_string),
         version: version.to_string(),
+        declared: declared
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && *value != "latest")
+            .map(str::to_string),
         pkg_type: pkg_type.to_string(),
         loader,
     };

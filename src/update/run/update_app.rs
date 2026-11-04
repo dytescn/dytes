@@ -150,6 +150,27 @@ pub async fn update_app_info(
         return Ok(());
     }
 
+    // 3.1 仅清单应用：没有产物，只写回清单并登记版本。
+    if remote_app_info.exports.is_empty() && remote_app_info.platform_exports.is_empty() {
+        let app_dir = get_app_dir();
+        std::fs::create_dir_all(&app_dir).context("创建应用目录失败")?;
+        let local_config = Path::new(&app_dir).join("dytes.json");
+        let merged_text = merge_local_dependencies(&local_config, &remote_app_info_text)
+            .unwrap_or_else(|_| remote_app_info_text.clone());
+        std::fs::write(&local_config, &merged_text)
+            .with_context(|| format!("更新本地 dytes.json 失败: {}", local_config.display()))?;
+        update_package_in_lock(
+            remote_app_info.uuid.as_deref(),
+            &name,
+            &remote_app_info.version,
+            Some(&config_version),
+            "app",
+            Vec::new(),
+        )?;
+        println!("  仅清单应用已安装: {} v{}", name, remote_app_info.version);
+        return Ok(());
+    }
+
     // 4. 远程清单已获取
     let platform = crate::update::utils::platform::current_platform();
     let Some((exports, platform_tag)) =
@@ -231,6 +252,7 @@ pub async fn update_app_info(
         remote_app_info.uuid.as_deref(),
         &name,
         &remote_app_info.version,
+        Some(&config_version),
         "app",
         loader,
     )

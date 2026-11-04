@@ -101,6 +101,21 @@ pub async fn update_sys_info(
     let remote_app_info: DytesConfig = serde_json::from_str(&remote_text)
         .with_context(|| format!("解析 system/{}/dytes.json 失败", name))?;
 
+    // 仅清单包：没有产物，只保存清单并登记版本。
+    if remote_app_info.exports.is_empty() && remote_app_info.platform_exports.is_empty() {
+        save_manifest(&name, &remote_text)?;
+        update_package_in_lock(
+            remote_app_info.uuid.as_deref(),
+            &name,
+            &remote_app_info.version,
+            Some(&declared_version),
+            "sys",
+            Vec::new(),
+        )?;
+        println!("  仅清单包已安装: {} v{}", name, remote_app_info.version);
+        return Ok(None);
+    }
+
     let platform = crate::update::utils::platform::current_platform();
     let Some((exports, platform_tag)) =
         crate::update::utils::platform::select_exports(&remote_app_info, &platform)
@@ -223,6 +238,7 @@ pub async fn update_sys_info(
         remote_app_info.uuid.as_deref(),
         &name,
         &remote_app_info.version,
+        Some(&declared_version),
         "sys",
         loader,
     )?;

@@ -30,6 +30,24 @@ pub async fn update_model_info(name: String, declared_version: String) -> Result
     let remote_info: DytesConfig =
         serde_json::from_str(&remote_text).with_context(|| format!("解析 {} 失败", s3_path))?;
 
+    // 仅清单模型：没有产物，只保存清单并登记版本。
+    if remote_info.exports.is_empty() && remote_info.platform_exports.is_empty() {
+        let app_dir = get_app_dir();
+        let model_dir = format!("{}/models/{}", app_dir.trim_end_matches('/'), name);
+        fs::create_dir_all(&model_dir)?;
+        fs::write(format!("{}/dytes.json", model_dir), &remote_text)?;
+        update_package_in_lock(
+            remote_info.uuid.as_deref(),
+            &name,
+            &remote_info.version,
+            Some(&declared_version),
+            "model",
+            Vec::new(),
+        )?;
+        println!("  仅清单模型已安装: {} v{}", name, remote_info.version);
+        return Ok(());
+    }
+
     let platform = crate::update::utils::platform::current_platform();
     let Some((exports, platform_tag)) =
         crate::update::utils::platform::select_exports(&remote_info, &platform)
@@ -84,6 +102,7 @@ pub async fn update_model_info(name: String, declared_version: String) -> Result
         remote_info.uuid.as_deref(),
         &name,
         &remote_info.version,
+        Some(&declared_version),
         "model",
         loader,
     )?;

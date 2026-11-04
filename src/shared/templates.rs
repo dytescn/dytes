@@ -2,7 +2,12 @@ use crate::shared::config::PackageType;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-pub fn init_manifest(pkg_type: PackageType, name: &str, version: &str) -> Value {
+pub fn init_manifest(
+    pkg_type: PackageType,
+    name: &str,
+    version: &str,
+    include_exports: bool,
+) -> Value {
     let base = json!({
         "name": name,
         "uuid": Uuid::new_v4().to_string(),
@@ -13,6 +18,9 @@ pub fn init_manifest(pkg_type: PackageType, name: &str, version: &str) -> Value 
     });
     let mut manifest = base;
     let object = manifest.as_object_mut().expect("manifest object");
+    if !include_exports {
+        return manifest;
+    }
     match pkg_type {
         PackageType::App | PackageType::Core => {
             object.insert(
@@ -83,11 +91,22 @@ mod tests {
             PackageType::DesignSoft,
             PackageType::Model,
         ] {
-            let value = init_manifest(pkg_type, "demo", "0.1.0");
+            let value = init_manifest(pkg_type, "demo", "0.1.0", true);
             let config: DytesConfig = serde_json::from_value(value).unwrap();
             config.validate().unwrap();
             assert_eq!(config.package_type().unwrap(), pkg_type);
             assert!(config.uuid.as_deref().is_some_and(|uuid| !uuid.is_empty()));
         }
+    }
+
+    #[test]
+    fn manifest_only_template_has_no_exports() {
+        let value = init_manifest(PackageType::App, "demo", "0.1.0", false);
+        assert!(value.get("exports").is_none());
+        assert!(value.get("platform-exports").is_none());
+        let config: DytesConfig = serde_json::from_value(value).unwrap();
+        config.validate_with_options(true).unwrap();
+        assert!(config.validate().is_err());
+        assert_eq!(config.package_type().unwrap(), PackageType::App);
     }
 }

@@ -211,8 +211,8 @@ pub async fn download_file(url_or_path: &str, output_dir: &str) -> bool {
         match result {
             Ok(()) => return true,
             Err(e) => {
-                last_error = format!("{}", e);
-                eprintln!("  下载失败 (尝试 {}/{}): {}", attempt + 1, MAX_RETRIES, e);
+                last_error = format!("{e:#}");
+                eprintln!("  下载失败 (尝试 {}/{}): {e:#}", attempt + 1, MAX_RETRIES);
                 if !is_retryable_error(&e) {
                     break;
                 }
@@ -269,7 +269,19 @@ async fn download_from_s3(object_name: &str, output_dir: &str) -> Result<()> {
         .key(object_name)
         .send()
         .await
-        .context("S3 HEAD 请求失败")?;
+        .map_err(|error| {
+            let detail = format!("{error}");
+            let lower = detail.to_lowercase();
+            if lower.contains("notfound")
+                || lower.contains("no such key")
+                || lower.contains("nosuchkey")
+                || lower.contains("404")
+            {
+                anyhow!("S3 对象不存在: {object_name} ({detail})")
+            } else {
+                anyhow!("S3 HEAD 请求失败: {object_name} ({detail})")
+            }
+        })?;
     let total_size = head.content_length().unwrap_or(0) as u64;
     if total_size == 0 {
         return Err(anyhow!("S3 对象大小为 0，可能无效"));

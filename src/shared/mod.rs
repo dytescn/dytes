@@ -7,6 +7,7 @@ pub mod error;
 pub mod lock;
 pub mod package;
 pub mod platform;
+pub mod plugin_manifest;
 pub mod templates;
 pub mod version;
 

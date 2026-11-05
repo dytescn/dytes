@@ -21,7 +21,7 @@ inputs:
   version:
     description: "dytes release version to download"
     required: false
-    default: "0.1.11"
+    default: "0.1.12"
 
 runs:
   using: composite
@@ -41,7 +41,8 @@ runs:
         url="https://github.com/dytescn/dytes/releases/download/v${DYTES_VERSION}/${asset}"
         bin_dir="${RUNNER_TEMP}/dytes-bin"
         mkdir -p "${bin_dir}"
-        curl -fsSL "${url}" -o "${bin_dir}/dytes"
+        curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 --retry-connrefused \
+          "${url}" -o "${bin_dir}/dytes"
         if [ "${{ runner.os }}" = "Windows" ]; then
           mv "${bin_dir}/dytes" "${bin_dir}/dytes.exe"
         fi
@@ -63,4 +64,8 @@ runs:
         if [ -n "${DYTES_ARGS}" ]; then
           read -r -a extra <<< "${DYTES_ARGS}"
         fi
-        dytes "${DYTES_COMMAND}" "${extra[@]}"
+        if [ ${#extra[@]} -gt 0 ]; then
+          dytes "${DYTES_COMMAND}" "${extra[@]}"
+        else
+          dytes "${DYTES_COMMAND}"
+        fi

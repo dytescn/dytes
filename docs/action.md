@@ -37,7 +37,7 @@ Action 会自动下载对应平台的 `dytes` 发布二进制并执行，无需�
 | `command` | `publish` | 子命令：`publish` / `update` / `self-update` / `install` / `init` / `config` |
 | `args` | 空 | 追加参数，例如 `--force`、`--dry-run`、`--platform windows` |
 | `dir` | `.` | 包目录（相对 workspace） |
-| `version` | `0.1.11` | 下载的 dytes 版本，与 Action 引用版本保持一致 |
+| `version` | `0.1.12` | 下载的 dytes 版本，与 Action 引用版本保持一致 |
 
 ## 3. 常见示例
 

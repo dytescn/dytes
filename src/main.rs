@@ -6,11 +6,12 @@ use dytes::shared::credentials::{mask, ToolConfig};
 use dytes::shared::error::{DytesError, Result};
 use dytes::shared::package;
 use dytes::shared::platform;
+use dytes::shared::plugin_manifest::{self, CheckReport};
 use dytes::shared::templates;
 use dytes::update::run::update_design::DesignKind;
 use serde_json::json;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 
 #[derive(Parser)]
@@ -34,6 +35,8 @@ enum Commands {
     SelfUpdate(SelfUpdateArgs),
     /// 发布当前包
     Publish(PublishArgs),
+    /// 校验包清单（设计插件会执行完整规则）
+    Check(CheckArgs),
     /// 初始化 dytes.json
     Init(InitArgs),
     /// 管理 S3 凭证与工具配置
@@ -120,8 +123,29 @@ struct PublishArgs {
     /// 只发布 dytes.json，不上传产物（需求 / 训练类包）
     #[arg(long = "manifest-only")]
     manifest_only: bool,
+    /// 跳过设计插件清单校验（不建议）
+    #[arg(long = "skip-check")]
+    skip_check: bool,
     #[arg(long)]
     force: bool,
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Args)]
+struct CheckArgs {
+    /// 包目录（默认当前目录）
+    #[arg(value_name = "DIR")]
+    dir: Option<PathBuf>,
+    /// 只接受指定类型；与清单 type 不一致时报错
+    #[arg(long = "type", value_name = "TYPE")]
+    pkg_type: Option<String>,
+    /// 按指定平台选择 platform-exports（默认当前平台）
+    #[arg(long)]
+    platform: Option<String>,
+    /// 允许没有 exports 的“仅清单”包
+    #[arg(long = "manifest-only")]
+    manifest_only: bool,
     #[arg(long)]
     json: bool,
 }
@@ -198,6 +222,7 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Config(args) => run_config(args),
         Commands::Init(args) => run_init(args),
         Commands::Publish(args) => run_publish(args),
+        Commands::Check(args) => run_check(args),
         Commands::Install(args) => run_install(args),
         Commands::Update(args) => run_update(args),
         Commands::SelfUpdate(args) => run_self_update(args),
@@ -307,6 +332,79 @@ fn run_config(args: ConfigArgs) -> Result<()> {
     }
 }
 
+fn run_check(args: CheckArgs) -> Result<()> {
+    let dir = args.dir.unwrap_or(std::env::current_dir()?);
+    let config_path = dir.join("dytes.json");
+    let text = fs::read_to_string(&config_path)
+        .map_err(|e| DytesError::config(format!("读取 {} 失败: {e}", config_path.display())))?;
+    let manifest: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| DytesError::config(format!("解析 {} 失败: {e}", config_path.display())))?;
+    let config = DytesConfig::read_with(&config_path, args.manifest_only)?;
+    let pkg_type = config.package_type()?;
+
+    if let Some(expected) = args.pkg_type.as_deref() {
+        let expected = PackageType::parse(expected)
+            .ok_or_else(|| DytesError::args(format!("未知包类型: {expected}")))?;
+        if expected != pkg_type {
+            return Err(DytesError::config(format!(
+                "清单类型为 {}，与 --type {} 不一致",
+                pkg_type.as_str(),
+                expected.as_str()
+            )));
+        }
+    }
+
+    let platform = args.platform.unwrap_or_else(platform::current_platform);
+    let mut report = CheckReport::default();
+    report.pass("dytes.json 可解析", config_path.display().to_string());
+
+    match pkg_type {
+        PackageType::DesignPlugins => {
+            report.extend(plugin_manifest::check_design_plugin(
+                &dir, &manifest, &platform,
+            ));
+        }
+        _ if args.manifest_only => {}
+        _ => match platform::select_exports(&config, &platform) {
+            Some((exports, _)) if !exports.is_empty() => {
+                report.pass("exports 非空", format!("{} 个", exports.len()));
+                for source in exports.keys() {
+                    let path = dir.join(source.trim_start_matches("./"));
+                    report.record(
+                        format!("exports 文件存在: {source}"),
+                        path.is_file(),
+                        path.display().to_string(),
+                    );
+                }
+            }
+            Some(_) => report.fail("exports 非空", "<缺失>"),
+            None => report.fail("当前平台导出", format!("platform-exports 缺少 {platform}")),
+        },
+    }
+
+    if args.json {
+        let checks: Vec<serde_json::Value> = report
+            .items
+            .iter()
+            .map(|item| {
+                json!({ "label": item.label, "ok": item.ok, "detail": item.detail })
+            })
+            .collect();
+        println!("{}", json!({ "passed": report.passed(), "checks": checks }));
+    } else {
+        report.print();
+    }
+
+    if report.passed() {
+        Ok(())
+    } else {
+        Err(DytesError::config(format!(
+            "清单校验失败: {} 项",
+            report.failure_count()
+        )))
+    }
+}
+
 fn run_init(args: InitArgs) -> Result<()> {
     let pkg_type = PackageType::parse(&args.pkg_type)
         .ok_or_else(|| DytesError::args(format!("未知包类型: {}", args.pkg_type)))?;
@@ -356,6 +454,15 @@ fn run_publish(args: PublishArgs) -> Result<()> {
         .platform
         .clone()
         .unwrap_or_else(platform::current_platform);
+
+    // 设计插件在发布前执行完整清单校验；`--skip-check` 仅供紧急发布使用。
+    if pkg_type == PackageType::DesignPlugins && !args.skip_check {
+        let manifest: serde_json::Value = serde_json::from_str(&fs::read_to_string(&config_path)?)
+            .map_err(|e| DytesError::config(format!("解析 {} 失败: {e}", config_path.display())))?;
+        let package_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
+        plugin_manifest::ensure_design_plugin(package_dir, &manifest, &platform)?;
+    }
+
     let uuid = config.uuid.as_deref().unwrap_or("");
     let mut plan = Vec::new();
     if !args.manifest_only {
@@ -446,10 +553,26 @@ fn run_publish(args: PublishArgs) -> Result<()> {
         }
     }
     if args.dry_run {
+        let missing: Vec<&str> = plan
+            .iter()
+            .filter(|item| !item.get("exists").and_then(|v| v.as_bool()).unwrap_or(false))
+            .filter_map(|item| item.get("source").and_then(|v| v.as_str()))
+            .collect();
+        if !missing.is_empty() {
+            return Err(DytesError::config(format!(
+                "导出文件缺失: {}",
+                missing.join(", ")
+            )));
+        }
         return Ok(());
     }
-    dytes::publish::run::dytes::publish_with_options(&config_path, args.force, args.manifest_only)
-        .map_err(|error| DytesError::failed(format!("{error:#}")))
+    dytes::publish::run::dytes::publish_with_options(
+        &config_path,
+        args.force,
+        args.manifest_only,
+        args.skip_check,
+    )
+    .map_err(|error| DytesError::failed(format!("{error:#}")))
 }
 
 fn run_install(args: InstallArgs) -> Result<()> {

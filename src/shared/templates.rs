@@ -18,6 +18,13 @@ pub fn init_manifest(
     });
     let mut manifest = base;
     let object = manifest.as_object_mut().expect("manifest object");
+    if pkg_type == PackageType::DesignPlugins {
+        // 设计插件的分类字段与是否产出二进制无关，始终写入。
+        object.insert("plugins_type".to_string(), json!("plugins"));
+        object.insert("targets".to_string(), json!(["common"]));
+        object.insert("use_ai".to_string(), json!(false));
+        object.insert("mcp".to_string(), json!("mcp.json"));
+    }
     if !include_exports {
         return manifest;
     }
@@ -56,8 +63,6 @@ pub fn init_manifest(
                     "./mcp.json": "mcp.json"
                 }),
             );
-            object.insert("targets".to_string(), json!([]));
-            object.insert("use_ai".to_string(), json!(false));
         }
         PackageType::DesignSoft => {
             object.insert(
@@ -97,6 +102,16 @@ mod tests {
             assert_eq!(config.package_type().unwrap(), pkg_type);
             assert!(config.uuid.as_deref().is_some_and(|uuid| !uuid.is_empty()));
         }
+    }
+
+    #[test]
+    fn design_plugin_template_has_required_fields() {
+        let value = init_manifest(PackageType::DesignPlugins, "demo", "0.1.0", true);
+        assert_eq!(value["plugins_type"], "plugins");
+        assert_eq!(value["targets"], json!(["common"]));
+        assert_eq!(value["use_ai"], false);
+        assert_eq!(value["mcp"], "mcp.json");
+        assert!(value["exports"].get("./mcp.json").is_some());
     }
 
     #[test]

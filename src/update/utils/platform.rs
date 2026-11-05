@@ -4,15 +4,9 @@ use crate::shared::platform::normalize_platform;
 use crate::update::utils::dytes::DytesConfig;
 
 /// 当前平台名：windows / linux / macos
-/// 可用 PIKSEL_PLATFORM 环境变量覆盖，便于测试其它平台。
+/// 与 shared::platform 保持一致，支持 DYTES_PLATFORM / PIKSEL_PLATFORM 覆盖。
 pub fn current_platform() -> String {
-    if let Ok(value) = std::env::var("PIKSEL_PLATFORM") {
-        let value = normalize_platform(&value);
-        if !value.is_empty() {
-            return value;
-        }
-    }
-    normalize_platform(std::env::consts::OS)
+    crate::shared::platform::current_platform()
 }
 
 /// 选择当前平台的导出文件；没有平台专用配置时回退到通用 exports。

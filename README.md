@@ -36,7 +36,7 @@
 ## GitHub Action
 
 ```yaml
-- uses: dytescn/dytes@v0.1.11
+- uses: dytescn/dytes@v0.1.12
   with:
     command: publish
 ```

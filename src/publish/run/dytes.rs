@@ -231,12 +231,17 @@ fn ensure_manifest_uuid(json_path: &Path, raw: &str) -> Result<String> {
 /// 只有所有文件都上传成功后，才把新版本写进 packages.json，
 /// 避免客户端在文件尚未上传完成时看到新版本。
 pub fn publish(json_path: &Path, force: bool) -> Result<()> {
-    publish_with_options(json_path, force, false)
+    publish_with_options(json_path, force, false, false)
 }
 
 /// 发布包；`manifest_only = true` 时只上传 `dytes.json` 与索引，
-/// 用于需求 / 训练类“无产物包”。
-pub fn publish_with_options(json_path: &Path, force: bool, manifest_only: bool) -> Result<()> {
+/// 用于需求 / 训练类“无产物包”；`skip_check = true` 跳过设计插件清单校验。
+pub fn publish_with_options(
+    json_path: &Path,
+    force: bool,
+    manifest_only: bool,
+    skip_check: bool,
+) -> Result<()> {
     println!("读取配置文件...");
 
     // 1. 读取 dytes.json
@@ -274,6 +279,10 @@ pub fn publish_with_options(json_path: &Path, force: bool, manifest_only: bool) 
         serde_json::from_str(&manifest_text).with_context(|| "解析 dytes.json 失败")?;
 
     let platform = crate::publish::utils::platform::current_platform();
+    if pkg_type == "design_plugins" && !skip_check {
+        let package_dir = json_path.parent().unwrap_or(Path::new("."));
+        crate::shared::plugin_manifest::ensure_design_plugin(package_dir, &manifest, &platform)?;
+    }
     let (exports, platform_tag) = if manifest_only {
         (HashMap::new(), None)
     } else {

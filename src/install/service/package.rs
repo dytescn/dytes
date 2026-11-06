@@ -4,10 +4,12 @@
 //! [`update_design::update_design_info`]，保证安装与更新使用同一套目录约定、
 //! 锁文件与 libary 注册逻辑。
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 use crate::update::run::update_design::{self, DesignKind};
+use crate::update::utils::dytes::DytesConfig;
+use crate::update::utils::loader::fetch_text;
 
 pub fn install_design(
     name: &str,
@@ -16,13 +18,26 @@ pub fn install_design(
     force: bool,
 ) -> Result<Value> {
     let runtime = tokio::runtime::Runtime::new()?;
-    let result = runtime.block_on(update_design::update_design_info(
-        name.to_string(),
-        version.unwrap_or("latest").to_string(),
-        kind,
-        force,
-        version,
-    ))?;
+    let result = runtime.block_on(async {
+        // 先按插件清单安装依赖；已安装且版本满足的包会跳过，
+        // 未安装或落后的包安装线上最新版本，环上的回边会被跳过。
+        let manifest_path = format!("{}/{}/dytes.json", kind.as_str(), name);
+        let manifest_text = fetch_text(&manifest_path)
+            .await
+            .with_context(|| format!("获取 {} 失败", manifest_path))?;
+        let manifest: DytesConfig = serde_json::from_str(&manifest_text)
+            .with_context(|| format!("解析 {} 失败", manifest_path))?;
+        crate::update::run::dytes::install_dependencies_for(&manifest).await?;
+
+        update_design::update_design_info(
+            name.to_string(),
+            version.unwrap_or("latest").to_string(),
+            kind,
+            force,
+            version,
+        )
+        .await
+    })?;
 
     Ok(json!({
         "type": kind.as_str(),

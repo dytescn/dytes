@@ -140,7 +140,18 @@ async fn plan_dependencies(config: &DytesConfig, sync_online: bool) -> Result<De
                     }
                 }
 
-                let children = get_all_dependencies(&remote);
+                // 非根依赖若已安装且不低于线上版本，不再展开它的子依赖：
+                // 版本已满足时它的依赖也应当已安装，同时可避免无意义的环展开。
+                let installed = get_package_version_from_lock(&dep.name).ok().flatten();
+                let up_to_date = installed
+                    .as_deref()
+                    .map(|local| !check_version(local, &remote.version))
+                    .unwrap_or(false);
+                let children = if !is_root && up_to_date {
+                    Vec::new()
+                } else {
+                    get_all_dependencies(&remote)
+                };
                 edges.insert(key.clone(), children.iter().map(DepKey::new).collect());
                 nodes.insert(key, dep);
                 for child in children {
@@ -161,7 +172,8 @@ async fn plan_dependencies(config: &DytesConfig, sync_online: bool) -> Result<De
         }
     }
 
-    let order = topo_sort(&nodes, &edges)?;
+    let (order, cycle_warnings) = topo_sort(&nodes, &edges);
+    warnings.extend(cycle_warnings);
     let mut deps = Vec::new();
     for key in order {
         if let Some(dep) = nodes.get(&key) {
@@ -176,13 +188,18 @@ async fn plan_dependencies(config: &DytesConfig, sync_online: bool) -> Result<De
     })
 }
 
-/// 迭代式 DFS 拓扑排序；`Gray` 节点再次被访问即表示存在环。
+/// 迭代式 DFS 拓扑排序；遇到回边（环）时跳过该边并记录警告，不中止整个计划。
+///
+/// 依赖图允许存在 sys ↔ web 之类的互依赖；每个包只安装一次，
+/// 安装时由各 update_* 函数根据锁文件版本决定是否跳过。
 fn topo_sort(
     nodes: &BTreeMap<DepKey, Dependency>,
     edges: &BTreeMap<DepKey, Vec<DepKey>>,
-) -> Result<Vec<DepKey>> {
+) -> (Vec<DepKey>, Vec<String>) {
     let mut color: BTreeMap<DepKey, u8> = nodes.keys().cloned().map(|key| (key, 0)).collect();
     let mut order = Vec::new();
+    let mut warnings = Vec::new();
+    let mut seen_cycles: HashSet<String> = HashSet::new();
 
     for start in nodes.keys() {
         if color.get(start).copied().unwrap_or(0) != 0 {
@@ -204,12 +221,18 @@ fn topo_sort(
                         stack.push((child, 0));
                     }
                     1 => {
+                        // 回边：跳过这条边，继续完成其余节点。
                         let chain = stack
                             .iter()
                             .map(|(node, _)| node.display())
+                            .chain(std::iter::once(child.display()))
                             .collect::<Vec<_>>()
                             .join(" -> ");
-                        return Err(anyhow!("依赖存在环: {} -> {}", chain, child.display()));
+                        if seen_cycles.insert(chain.clone()) {
+                            warnings.push(format!(
+                                "检测到依赖环，已跳过环上的边并继续: {chain}"
+                            ));
+                        }
                     }
                     _ => {}
                 }
@@ -221,7 +244,7 @@ fn topo_sort(
         }
     }
 
-    Ok(order)
+    (order, warnings)
 }
 
 /// 按依赖类型调用对应的更新函数。
@@ -276,6 +299,48 @@ async fn update_one_dependency(
             update_model::update_model_info(dep.name.clone(), dep.version.clone()).await
         }
     }
+}
+
+/// 为一个设计包 / 插件安装其声明的依赖。
+///
+/// 规则与 `dytes update` 一致：
+/// - 已安装且版本不低于线上版本：跳过；
+/// - 未安装或版本落后：安装线上最新版本；
+/// - 依赖图存在环：跳过回边并继续，不中止安装。
+pub(crate) async fn install_dependencies_for(config: &DytesConfig) -> Result<()> {
+    let plan = plan_dependencies(config, true).await?;
+    for warning in &plan.warnings {
+        println!("  警告: {warning}");
+    }
+    if !plan.failures.is_empty() {
+        return Err(anyhow!("依赖检查失败: {}", plan.failures.join("; ")));
+    }
+
+    let mut sys_init_results = Vec::new();
+    let mut web_init_results = Vec::new();
+    for dep in plan.order {
+        if dep.name == config.name {
+            continue;
+        }
+        update_one_dependency(&dep, &mut sys_init_results, &mut web_init_results).await?;
+    }
+
+    let mut scripts: Vec<(String, Vec<String>)> = Vec::new();
+    scripts.extend(
+        sys_init_results
+            .into_iter()
+            .map(|result| (result.package_dir, result.init_scripts)),
+    );
+    scripts.extend(
+        web_init_results
+            .into_iter()
+            .map(|result| (result.web_dir, result.init_scripts)),
+    );
+    scripts.retain(|(_, init_scripts)| !init_scripts.is_empty());
+    if !scripts.is_empty() {
+        run_all_init_scripts(scripts).await?;
+    }
+    Ok(())
 }
 
 /// 进度回调类型
@@ -1003,7 +1068,8 @@ mod tests {
         edges.insert(key(&database), vec![]);
         edges.insert(key(&info), vec![key(&database)]);
 
-        let order = topo_sort(&nodes, &edges).unwrap();
+        let (order, warnings) = topo_sort(&nodes, &edges);
+        assert!(warnings.is_empty());
         let position = |name: &str| {
             order
                 .iter()
@@ -1015,7 +1081,7 @@ mod tests {
     }
 
     #[test]
-    fn topo_sort_reports_cycle() {
+    fn topo_sort_tolerates_cycle() {
         let a = dep(DependencyType::Sys, "a", "1.0.0");
         let b = dep(DependencyType::Sys, "b", "1.0.0");
         let mut nodes = BTreeMap::new();
@@ -1025,9 +1091,11 @@ mod tests {
         edges.insert(key(&a), vec![key(&b)]);
         edges.insert(key(&b), vec![key(&a)]);
 
-        let error = topo_sort(&nodes, &edges).unwrap_err().to_string();
-        assert!(error.contains("依赖存在环"), "{}", error);
-        assert!(error.contains("a") && error.contains("b"), "{}", error);
+        let (order, warnings) = topo_sort(&nodes, &edges);
+        assert_eq!(order.len(), 2);
+        assert!(warnings.iter().any(|item| item.contains("依赖环")));
+        assert!(warnings.iter().any(|item| item.contains("system/a")));
+        assert!(warnings.iter().any(|item| item.contains("system/b")));
     }
 
     #[test]

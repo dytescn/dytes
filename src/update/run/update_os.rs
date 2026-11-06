@@ -6,6 +6,42 @@ use crate::update::utils::lock::{get_package_version_from_lock, update_package_i
 use crate::update::utils::version::check_version;
 use anyhow::{Context, Result};
 use std::fs;
+use std::path::Path;
+
+/// Unix 下给可执行产物设置执行位。
+///
+/// S3 / 下载落盘不会保留源文件的权限，`cyctron`、`update` 等无扩展名的
+/// 可执行文件默认是 0644，启动时会 `Permission denied`。
+#[cfg(unix)]
+fn ensure_executable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = fs::metadata(path)?.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions)?;
+    Ok(())
+}
+
+/// 只对非文本导出设置执行位，避免把 `setup.ts` / `mcp.md` 误标为可执行。
+#[cfg(unix)]
+fn ensure_executable_if_binary(path: &Path) -> Result<()> {
+    let ext = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if matches!(
+        ext.as_str(),
+        "json" | "md" | "ts" | "txt" | "toml" | "yml" | "yaml" | "dll" | "so" | "dylib"
+    ) {
+        return Ok(());
+    }
+    ensure_executable(path)
+}
+
+#[cfg(not(unix))]
+fn ensure_executable_if_binary(_path: &Path) -> Result<()> {
+    Ok(())
+}
 
 /// 去除版本号前缀（^ / ~）
 fn parse_version(version: &str) -> Option<String> {
@@ -84,6 +120,7 @@ pub async fn update_os_info(name: String, declared_version: String) -> Result<()
             let dst = format!("{}/update.new.exe", app_dir.trim_end_matches('/'));
             let _ = fs::remove_file(&dst);
             fs::rename(&src, &dst)?;
+            ensure_executable_if_binary(Path::new(&dst))?;
             println!("  已准备新版本: {}（Piksel 启动时替换 update.exe）", dst);
 
             let mut loader = Vec::new();
@@ -127,6 +164,8 @@ pub async fn update_os_info(name: String, declared_version: String) -> Result<()
             dest_filename,
             &remote_app_info.checksums,
         )?;
+        // S3 不保留执行位：cyctron / dytes / update 等 core 产物需要 0755。
+        ensure_executable_if_binary(Path::new(&dest_path))?;
         println!("  下载完成: {}", dest_filename);
     }
 

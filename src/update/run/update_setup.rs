@@ -122,8 +122,13 @@ fn wait_for_port(port: u16, timeout: Duration) -> bool {
 
 /// 启动 cyctron.exe（公共导出）
 pub fn start_cyctron() -> Result<()> {
+    let exe_name = if cfg!(windows) {
+        "cyctron.exe"
+    } else {
+        "cyctron"
+    };
     if is_cyctron_running() {
-        println!("  cyctron.exe 已在运行");
+        println!("  {exe_name} 已在运行");
         return Ok(());
     }
 
@@ -137,7 +142,7 @@ pub fn start_cyctron() -> Result<()> {
     let child = Command::new(exe)
         .arg("start")
         .spawn()
-        .context("启动 cyctron.exe 失败")?;
+        .with_context(|| format!("启动 {exe_name} 失败"))?;
 
     thread::sleep(Duration::from_millis(500));
     if wait_for_port(44944, Duration::from_secs(30)) {
@@ -153,7 +158,7 @@ pub fn start_cyctron() -> Result<()> {
     let pid = child.id();
 
     fs::write(PID_FILE, pid.to_string())?;
-    println!("  cyctron.exe (PID: {}) 已启动", pid);
+    println!("  {exe_name} (PID: {}) 已启动", pid);
 
     Ok(())
 }

@@ -197,6 +197,27 @@ async fn fetch_manifest(client: &reqwest::Client) -> Result<DytesConfig> {
     bail!("读取 {url} 失败: {last_error}")
 }
 
+/// 读取指定版本的 CDN 清单（不可变路径，不受未版本化清单缓存影响）。
+async fn fetch_versioned_manifest(client: &reqwest::Client, version: &str) -> Result<DytesConfig> {
+    let url = format!("{}/{}/dytes.json", cdn_base(), version);
+    let mut last_error = String::new();
+    for attempt in 1..=RETRIES {
+        match client.get(&url).send().await {
+            Ok(response) if response.status().is_success() => {
+                let text = response.text().await.context("读取版本化 dytes 清单失败")?;
+                return serde_json::from_str(&text).context("解析版本化 dytes 清单失败");
+            }
+            Ok(response) => last_error = format!("HTTP {}", response.status()),
+            Err(error) => last_error = error.to_string(),
+        }
+        if attempt < RETRIES {
+            println!("  读取版本化清单失败 (尝试 {attempt}/{RETRIES}): {last_error}，稍后重试...");
+            tokio::time::sleep(Duration::from_secs(attempt as u64)).await;
+        }
+    }
+    bail!("读取 {url} 失败: {last_error}")
+}
+
 /// 读取 `latest/version.js` 中的发布版本。
 ///
 /// 清单可能被 CDN 缓存成旧版本，而 `version.js` 与 `latest` 别名同源；
@@ -444,10 +465,21 @@ pub async fn run(
 
     // 网站 / 安装脚本使用 CDN；自动更新时 CDN 只作为下载加速来源。
     if source != UpdateSource::S3 {
-        match fetch_manifest(&client).await {
+        let release_version = fetch_release_version(&client).await;
+        // 优先读取版本化清单：未版本化 dytes.json 可能被 CDN 缓存成旧版本。
+        let config_result = match release_version.as_deref() {
+            Some(version) => match fetch_versioned_manifest(&client, version).await {
+                Ok(config) => Ok(config),
+                Err(error) => {
+                    println!("  版本化清单不可用（{error:#}），回退未版本化清单");
+                    fetch_manifest(&client).await
+                }
+            },
+            None => fetch_manifest(&client).await,
+        };
+        match config_result {
             Ok(config) => {
                 let manifest_version = config.version.clone();
-                let release_version = fetch_release_version(&client).await;
                 let latest = pick_latest(&manifest_version, release_version.as_deref());
                 if let Some(release) = &release_version {
                     if release != &manifest_version {

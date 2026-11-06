@@ -392,7 +392,10 @@ function main() {
     try {
       online = await fetchOnlineVersion(options.index);
     } catch (error) {
-      fail(error.message);
+      // CDN / 网络故障不应阻断发布：版本文件与 tag 仍会严格校验。
+      // 需要强制比较时可使用 --index 或修复网络后重跑。
+      info(`警告: ${error.message}；跳过线上版本比较，继续发布`);
+      return;
     }
 
     if (!online) {

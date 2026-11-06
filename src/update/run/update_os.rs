@@ -90,6 +90,12 @@ pub async fn update_os_info(name: String, declared_version: String) -> Result<()
         ) {
             if !check_version(&local, &remote) {
                 println!("  已是最新版本 (v{})，跳过下载", local);
+                // 兼容旧安装：下载时未设置执行位的 core 产物在此补一次。
+                let app_dir = get_app_dir();
+                for dest_filename in exports.values() {
+                    let path = format!("{}/{}", app_dir.trim_end_matches('/'), dest_filename);
+                    let _ = ensure_executable_if_binary(Path::new(&path));
+                }
                 return Ok(());
             }
         }

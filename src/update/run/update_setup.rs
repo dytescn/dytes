@@ -139,6 +139,20 @@ pub fn start_cyctron() -> Result<()> {
     };
     println!("  启动: {}", exe);
 
+    // 兼容旧安装：0.1.14 之前下载的 core 产物可能是 0644。
+    #[cfg(unix)]
+    if Path::new(exe).exists() {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(metadata) = fs::metadata(exe) {
+            let mut permissions = metadata.permissions();
+            if permissions.mode() & 0o111 == 0 {
+                permissions.set_mode(0o755);
+                let _ = fs::set_permissions(exe, permissions);
+                println!("  已设置执行位: {}", exe);
+            }
+        }
+    }
+
     let child = Command::new(exe)
         .arg("start")
         .spawn()

@@ -8,6 +8,7 @@ use oxc::{
     parser::Parser,
     span::SourceType,
 };
+use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 
@@ -54,6 +55,26 @@ pub fn extract_http_requests_to_vec(script_path: &str) -> Result<Vec<HttpRequest
     let mut http_requests = Vec::new();
     for req in &visitor.requests {
         let headers = parse_headers(&req.headers);
+        // 静态提取只能处理字面量；函数形参 / 循环变量等请交给 Deno/Node 执行。
+        if is_identifier(&req.url) {
+            anyhow::bail!(
+                "init 脚本中的 fetch URL 使用了未解析变量 `{}`；请使用可执行的 init 脚本，或改为字面量",
+                req.url
+            );
+        }
+        for (key, value) in &headers {
+            if is_identifier(value) {
+                anyhow::bail!(
+                    "init 脚本中的请求头 `{key}` 使用了未解析变量 `{value}`；请使用可执行的 init 脚本，或改为字面量"
+                );
+            }
+        }
+        if is_identifier(&req.body) {
+            anyhow::bail!(
+                "init 脚本中的请求体使用了未解析变量 `{}`；请使用可执行的 init 脚本，或改为字面量",
+                req.body
+            );
+        }
         http_requests.push(HttpRequest {
             url: req.url.clone(),
             method: req.method.clone(),
@@ -63,6 +84,18 @@ pub fn extract_http_requests_to_vec(script_path: &str) -> Result<Vec<HttpRequest
     }
 
     Ok(http_requests)
+}
+
+fn is_identifier(value: &str) -> bool {
+    let value = value.trim();
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == '_' || first == '$') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
 }
 
 // ---------- 打印请求（调试用） ----------
@@ -119,6 +152,30 @@ pub async fn send_http_requests(requests: Vec<HttpRequest>) -> Result<()> {
                     .await
                     .unwrap_or_else(|_| "读取响应失败".to_string());
                 println!("响应内容: {}", response_text);
+
+                if !status.is_success() {
+                    return Err(anyhow!(
+                        "请求 #{} 失败: HTTP {}，响应: {}",
+                        index + 1,
+                        status,
+                        response_text
+                    ));
+                }
+
+                if let Ok(value) = serde_json::from_str::<Value>(&response_text) {
+                    if let Some(code) = value.get("code").and_then(Value::as_i64) {
+                        if code != 0 && code != 200 {
+                            let message = value
+                                .get("msg")
+                                .and_then(Value::as_str)
+                                .unwrap_or("unknown error");
+                            return Err(anyhow!(
+                                "请求 #{} 失败: 响应 code={code}，{message}",
+                                index + 1
+                            ));
+                        }
+                    }
+                }
             }
             Err(e) => {
                 eprintln!("请求 #{} 发送失败: {}", index + 1, e);

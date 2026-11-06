@@ -1,11 +1,14 @@
 use anyhow::{Context as AnyhowContext, Result};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-use crate::update::utils::script::{extract_http_requests_to_vec, send_http_requests};
+use crate::update::utils::script::{
+    HttpRequest, extract_http_requests_to_vec, send_http_requests,
+};
 
 const PID_FILE: &str = "./run.pid";
 
@@ -177,12 +180,75 @@ pub fn start_cyctron() -> Result<()> {
     Ok(())
 }
 
+/// 优先用本机 JS/TS 运行时真正执行 init 脚本。
+///
+/// 静态提取无法求值函数形参、循环和条件；有 Deno / Bun / Node 时直接执行，
+/// 才能覆盖 `setup.ts` 里封装函数、`for...of` 和 try/catch 的场景。
+fn run_init_with_runtime(script_path: &str) -> Option<Result<()>> {
+    let path = Path::new(script_path);
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file = path.file_name()?.to_string_lossy().to_string();
+
+    let candidates: [(&str, &[&str]); 3] = [
+        (
+            "deno",
+            &["run", "--allow-net", "--allow-read", "--allow-env", "--allow-write"],
+        ),
+        ("bun", &["run"]),
+        ("node", &["--experimental-strip-types"]),
+    ];
+
+    for (program, args) in candidates {
+        match Command::new(program)
+            .args(args)
+            .arg(&file)
+            .current_dir(parent)
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if !stdout.trim().is_empty() {
+                    println!("{}", stdout.trim());
+                }
+                println!("  init 脚本执行成功（{program}）");
+                return Some(Ok(()));
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Some(Err(anyhow::anyhow!(
+                    "init 脚本执行失败（{program}）: {}",
+                    stderr.trim()
+                )));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Some(Err(anyhow::anyhow!(
+                    "启动 {program} 执行 init 脚本失败: {error}"
+                )));
+            }
+        }
+    }
+
+    None
+}
+
 /// 执行单个 init 脚本（解析脚本中的 HTTP 请求并发送）
 async fn execute_init_script(script_path: &str) -> Result<()> {
     println!("  执行初始化脚本: {}", script_path);
 
+    // 有运行时优先真正执行；静态提取只作为无运行时环境的回退。
+    if let Some(result) = run_init_with_runtime(script_path) {
+        return result;
+    }
+
     // 1. 使用 oxc 静态解析脚本，提取所有 HTTP 请求
     let requests = extract_http_requests_to_vec(script_path)?;
+    if requests.is_empty() {
+        anyhow::bail!(
+            "init 脚本未包含可执行的 HTTP 请求（且未找到 deno / bun / node）: {}",
+            script_path
+        );
+    }
 
     // 2. 打印提取到的所有请求（便于调试）
     println!("  提取到 {} 个 HTTP 请求", requests.len());
@@ -199,6 +265,44 @@ async fn execute_init_script(script_path: &str) -> Result<()> {
 
     println!("  init 脚本执行成功");
     Ok(())
+}
+
+/// 插件安装后触发 `plugin_lib` 扫描：登记 plugins.db、导入 kv 集合。
+///
+/// 由 `dytes install plugin` 调用；`plugin_lib` 自己调用 dytes 时设置
+/// `DYTES_SKIP_PLUGIN_SCAN=1`，避免在 cyctron 请求处理中再次回调自身。
+pub async fn scan_plugin_registry() -> Result<()> {
+    if std::env::var_os("DYTES_SKIP_PLUGIN_SCAN").is_some() {
+        return Ok(());
+    }
+
+    let was_running = is_cyctron_running();
+    if !was_running {
+        start_cyctron()?;
+    }
+
+    let request = HttpRequest {
+        url: "http://127.0.0.1:44944/plugin_lib".to_string(),
+        method: "POST".to_string(),
+        headers: HashMap::from([
+            (
+                "Content-Type".to_string(),
+                "application/libary".to_string(),
+            ),
+            ("FFI-Symbol".to_string(), "post_scan".to_string()),
+        ]),
+        body: serde_json::json!({ "dir": "./plugins", "persist": true }).to_string(),
+    };
+
+    let result = send_http_requests(vec![request]).await;
+
+    if !was_running {
+        if let Err(error) = stop_cyctron() {
+            eprintln!("  关闭 cyctron 失败: {}", error);
+        }
+    }
+
+    result
 }
 
 /// 执行单个包内的所有 init 脚本（不管理 cyctron 生命周期，需外部保证 cyctron 已启动）

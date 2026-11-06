@@ -29,14 +29,21 @@ pub fn install_design(
             .with_context(|| format!("解析 {} 失败", manifest_path))?;
         crate::update::run::dytes::install_dependencies_for(&manifest).await?;
 
-        update_design::update_design_info(
+        let result = update_design::update_design_info(
             name.to_string(),
             version.unwrap_or("latest").to_string(),
             kind,
             force,
             version,
         )
-        .await
+        .await?;
+
+        // 插件下载完成后触发 plugin_lib 扫描，登记 plugins.db 并导入 kv。
+        if kind == DesignKind::Plugin {
+            crate::update::run::update_setup::scan_plugin_registry().await?;
+        }
+
+        Ok::<_, anyhow::Error>(result)
     })?;
 
     Ok(json!({

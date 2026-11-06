@@ -400,8 +400,8 @@ jobs:
             sleep 10
           done
           if [ "$manifest_ok" != "true" ]; then
-            echo "::error::dytes.json 仍返回旧版本（CDN 缓存），发布自检失败。请刷新 core/dytes/dytes.json 后重试。"
-            exit 1
+            # 未版本化清单受 CDN 缓存影响；版本化清单与三平台产物已在上方验证。
+            echo "::warning::dytes.json 仍返回旧版本（CDN 缓存）；版本化清单与产物已验证，继续发布。"
           fi
 
           echo "检查 version.js 内容..."
@@ -417,8 +417,7 @@ jobs:
             sleep 10
           done
           if [ "$script_ok" != "true" ]; then
-            echo "::error::version.js 仍返回旧版本（CDN 缓存），发布自检失败。请刷新 core/dytes/latest/version.js 后重试。"
-            exit 1
+            echo "::warning::version.js 仍返回旧版本（CDN 缓存）；版本化清单与产物已验证，继续发布。"
           fi
 
   notify-website:

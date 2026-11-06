@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::update::utils::script::{
-    HttpRequest, extract_http_requests_to_vec, send_http_requests,
+    HttpRequest, extract_http_requests_to_vec, load_json_requests, send_http_requests,
 };
 
 const PID_FILE: &str = "./run.pid";
@@ -236,7 +236,19 @@ fn run_init_with_runtime(script_path: &str) -> Option<Result<()>> {
 async fn execute_init_script(script_path: &str) -> Result<()> {
     println!("  执行初始化脚本: {}", script_path);
 
-    // 有运行时优先真正执行；静态提取只作为无运行时环境的回退。
+    // 新的 JSON init：请求列表直接通过 cyctron 执行。
+    if script_path.to_ascii_lowercase().ends_with(".json") {
+        let requests = load_json_requests(script_path)?;
+        if requests.is_empty() {
+            anyhow::bail!("JSON init 没有请求: {}", script_path);
+        }
+        println!("  读取到 {} 个 HTTP 请求", requests.len());
+        send_http_requests(requests).await?;
+        println!("  init 脚本执行成功（JSON）");
+        return Ok(());
+    }
+
+    // 旧 TS 脚本：有运行时优先真正执行；静态提取只作为无运行时环境的回退。
     if let Some(result) = run_init_with_runtime(script_path) {
         return result;
     }
@@ -292,6 +304,7 @@ pub async fn scan_plugin_registry() -> Result<()> {
             ("FFI-Symbol".to_string(), "post_scan".to_string()),
         ]),
         body: serde_json::json!({ "dir": "./plugins", "persist": true }).to_string(),
+        allow_error: false,
     };
 
     let result = send_http_requests(vec![request]).await;

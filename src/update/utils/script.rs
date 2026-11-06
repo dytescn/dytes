@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use serde::Deserialize;
 use oxc::{
     allocator::Allocator,
     ast::ast::{
@@ -20,6 +21,51 @@ pub struct HttpRequest {
     pub method: String,
     pub headers: HashMap<String, String>,
     pub body: String, // JSON 字符串（标准格式）
+    /// 允许 HTTP / 业务 code 失败（用于幂等 DDL、重复写入），传输失败仍报错。
+    pub allow_error: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InitFile {
+    #[serde(default)]
+    pub requests: Vec<InitRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InitRequest {
+    pub url: String,
+    #[serde(default = "default_method")]
+    pub method: String,
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
+    #[serde(default)]
+    pub body: Option<Value>,
+    #[serde(default)]
+    pub allow_error: bool,
+}
+
+fn default_method() -> String {
+    "POST".to_string()
+}
+
+/// 读取 `setup.json` 的请求列表。
+pub fn load_json_requests(path: &str) -> Result<Vec<HttpRequest>> {
+    let text = fs::read_to_string(path).map_err(|e| anyhow!("读取 JSON 失败: {e}"))?;
+    let init: InitFile = serde_json::from_str(&text).map_err(|e| anyhow!("解析 JSON 失败: {e}"))?;
+    Ok(init
+        .requests
+        .into_iter()
+        .map(|req| HttpRequest {
+            url: req.url,
+            method: req.method,
+            headers: req.headers,
+            body: req
+                .body
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            allow_error: req.allow_error,
+        })
+        .collect())
 }
 
 // ---------- 主提取函数：返回结构化请求列表 ----------
@@ -80,6 +126,7 @@ pub fn extract_http_requests_to_vec(script_path: &str) -> Result<Vec<HttpRequest
             method: req.method.clone(),
             headers,
             body: req.body.clone(),
+            allow_error: false,
         });
     }
 
@@ -154,6 +201,14 @@ pub async fn send_http_requests(requests: Vec<HttpRequest>) -> Result<()> {
                 println!("响应内容: {}", response_text);
 
                 if !status.is_success() {
+                    if req.allow_error {
+                        eprintln!(
+                            "  警告: 请求 #{} 返回 HTTP {}，按 allow_error 继续",
+                            index + 1,
+                            status
+                        );
+                        continue;
+                    }
                     return Err(anyhow!(
                         "请求 #{} 失败: HTTP {}，响应: {}",
                         index + 1,
@@ -169,6 +224,13 @@ pub async fn send_http_requests(requests: Vec<HttpRequest>) -> Result<()> {
                                 .get("msg")
                                 .and_then(Value::as_str)
                                 .unwrap_or("unknown error");
+                            if req.allow_error {
+                                eprintln!(
+                                    "  警告: 请求 #{} 返回 code={code}（{message}），按 allow_error 继续",
+                                    index + 1
+                                );
+                                continue;
+                            }
                             return Err(anyhow!(
                                 "请求 #{} 失败: 响应 code={code}，{message}",
                                 index + 1

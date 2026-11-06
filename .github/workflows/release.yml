@@ -259,6 +259,18 @@ jobs:
           destination_dir: core/dytes
           endpoint: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
 
+      # verify-release 会检查 core/dytes/<version>/dytes.json；
+      # 仅上传未版本化清单会导致 0.1.14 / 0.1.15 的自检 404。
+      - name: Upload versioned manifest to UpYun S3
+        uses: shallwefootball/s3-upload-action@master
+        with:
+          aws_key_id: ${{ secrets.UPYUN_API_KEY }}
+          aws_secret_access_key: ${{ secrets.UPYUN_API_SECRET }}
+          aws_bucket: ${{ secrets.UPYUN_BUCKET }}
+          source_dir: upload-manifest
+          destination_dir: core/dytes/${{ steps.version.outputs.version }}
+          endpoint: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
+
       - name: Upload website version script to UpYun S3
         uses: shallwefootball/s3-upload-action@master
         with:

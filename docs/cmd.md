@@ -218,8 +218,9 @@ dytes install --gui
 
 ### 4.4 行为
 
-- 当前 CLI 已接入 `plugin` / `design-soft`：复用更新引擎的下载、目录约定与锁文件；
-- 其余类型（app / core / sys / web / model）的安装引擎尚未接入；
+- `plugin` / `design-soft`：复用更新引擎的下载、目录约定与锁文件；
+- `sys` / `core` / `web` / `model`：写入应用 `dytes.json` 后，只安装目标包及其必要依赖，
+  不再执行全量 `update`，也不会因其他已声明依赖失败而整体失败；
 - 插件 → `plugins/<name>/`；设计软件 → `apps/<name>/`；
 - `plugin` / `design-soft` 只写 `dytes.lock` 与包目录 `dytes.json`，**不修改应用根 `dytes.json`**；
 - 安装失败不更新锁文件；

@@ -228,6 +228,7 @@ dytes install model <name>[@<version>]
 
 1. 校验类型、名称、版本；
 2. 读取对应 `packages.json`（新索引按 `uuid` 存放，旧 `name -> version` 仍兼容）；
+   `sys` / `core` / `web` / `model` 只安装目标包及其必要依赖，不检查其他已声明依赖；
 3. 下载 `exports` / `platform-exports`；
 4. 写入目标目录：
    - `design_plugins` → `plugins/<name>/`；

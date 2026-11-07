@@ -19,7 +19,7 @@
 | `dytes init` | 可用 | 生成七种包类型的 `dytes.json` 模板 |
 | `dytes publish --dry-run` | 可用 | 输出发布文件与远程路径，不上传 |
 | `dytes publish` | 可用 | 上传导出文件、`dytes.json` 与 `packages.json`，支持 `--platform` / `--force` |
-| `dytes install` | 可用（plugin / design-soft） | 复用更新引擎安装设计插件与设计软件；其他包类型待接入 |
+| `dytes install` | 可用 | 安装插件 / 设计软件 / sys / core / web / model；单包安装不触发全量 update |
 
 ## 包类型
 

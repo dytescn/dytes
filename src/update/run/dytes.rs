@@ -229,9 +229,7 @@ fn topo_sort(
                             .collect::<Vec<_>>()
                             .join(" -> ");
                         if seen_cycles.insert(chain.clone()) {
-                            warnings.push(format!(
-                                "检测到依赖环，已跳过环上的边并继续: {chain}"
-                            ));
+                            warnings.push(format!("检测到依赖环，已跳过环上的边并继续: {chain}"));
                         }
                     }
                     _ => {}
@@ -322,6 +320,69 @@ pub(crate) async fn install_dependencies_for(config: &DytesConfig) -> Result<()>
         if dep.name == config.name {
             continue;
         }
+        update_one_dependency(&dep, &mut sys_init_results, &mut web_init_results).await?;
+    }
+
+    let mut scripts: Vec<(String, Vec<String>)> = Vec::new();
+    scripts.extend(
+        sys_init_results
+            .into_iter()
+            .map(|result| (result.package_dir, result.init_scripts)),
+    );
+    scripts.extend(
+        web_init_results
+            .into_iter()
+            .map(|result| (result.web_dir, result.init_scripts)),
+    );
+    scripts.retain(|(_, init_scripts)| !init_scripts.is_empty());
+    if !scripts.is_empty() {
+        run_all_init_scripts(scripts).await?;
+    }
+    Ok(())
+}
+
+/// 构造只包含目标包的临时清单，避免单包安装读取应用的其他依赖。
+fn single_dependency_config(
+    dep_type: DependencyType,
+    name: &str,
+    version: &str,
+) -> Result<DytesConfig> {
+    let key = match dep_type {
+        DependencyType::Core => "dependencies-core",
+        DependencyType::Sys => "dependencies-sys",
+        DependencyType::Web => "dependencies-web",
+        DependencyType::DesignPlugins => "dependencies-design-plugins",
+        DependencyType::DesignSoft => "dependencies-design-soft",
+        DependencyType::Model => "dependencies-model",
+    };
+    let mut value = serde_json::json!({
+        "name": "__single_install__",
+        "version": "0.0.0",
+        "type": dep_type.as_str(),
+    });
+    value[key] = serde_json::json!({ name: version });
+    serde_json::from_value(value).map_err(|error| anyhow!("构造单包安装配置失败: {error}"))
+}
+
+/// 安装单个包及其必要依赖，不检查 / 更新应用清单中的其他依赖。
+pub async fn install_one_dependency(
+    dep_type: DependencyType,
+    name: &str,
+    version: &str,
+    sync_online: bool,
+) -> Result<()> {
+    let config = single_dependency_config(dep_type, name, version)?;
+    let plan = plan_dependencies(&config, sync_online).await?;
+    for warning in &plan.warnings {
+        println!("  警告: {warning}");
+    }
+    if !plan.failures.is_empty() {
+        return Err(anyhow!("依赖检查失败: {}", plan.failures.join("; ")));
+    }
+
+    let mut sys_init_results = Vec::new();
+    let mut web_init_results = Vec::new();
+    for dep in plan.order {
         update_one_dependency(&dep, &mut sys_init_results, &mut web_init_results).await?;
     }
 
@@ -1117,5 +1178,18 @@ mod tests {
             version_constraint_issue(&exact_new, "0.1.1"),
             Some(ConstraintIssue::Error(_))
         ));
+    }
+
+    #[test]
+    fn single_dependency_config_contains_only_target() {
+        let config = single_dependency_config(DependencyType::Sys, "cloud_lib", "1.0.0").unwrap();
+        assert_eq!(config.dependencies_sys.len(), 1);
+        assert_eq!(
+            config.dependencies_sys.get("cloud_lib").map(String::as_str),
+            Some("1.0.0")
+        );
+        assert!(config.dependencies_core.is_empty());
+        assert!(config.dependencies_web.is_empty());
+        assert!(config.dependencies_model.is_empty());
     }
 }

@@ -386,9 +386,7 @@ fn run_check(args: CheckArgs) -> Result<()> {
         let checks: Vec<serde_json::Value> = report
             .items
             .iter()
-            .map(|item| {
-                json!({ "label": item.label, "ok": item.ok, "detail": item.detail })
-            })
+            .map(|item| json!({ "label": item.label, "ok": item.ok, "detail": item.detail }))
             .collect();
         println!("{}", json!({ "passed": report.passed(), "checks": checks }));
     } else {
@@ -555,7 +553,12 @@ fn run_publish(args: PublishArgs) -> Result<()> {
     if args.dry_run {
         let missing: Vec<&str> = plan
             .iter()
-            .filter(|item| !item.get("exists").and_then(|v| v.as_bool()).unwrap_or(false))
+            .filter(|item| {
+                !item
+                    .get("exists")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+            })
             .filter_map(|item| item.get("source").and_then(|v| v.as_str()))
             .collect();
         if !missing.is_empty() {
@@ -722,15 +725,17 @@ fn install_dependency(
     fs::write(&manifest_path, serde_json::to_string_pretty(&value)?)
         .map_err(|e| DytesError::config(format!("写入 {} 失败: {e}", manifest_path.display())))?;
 
-    println!("已写入 {}: {}@{}；开始更新依赖", key, name, version);
+    println!("已写入 {}: {}@{}；开始安装目标包", key, name, version);
 
+    let dep_type = dytes::update::utils::dytes::DependencyType::from_name(pkg_type)
+        .ok_or_else(|| DytesError::args(format!("未知包类型: {pkg_type}")))?;
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|e| DytesError::failed(format!("创建异步运行时失败: {e}")))?;
     runtime
-        .block_on(dytes::update::run::dytes::init_dytes_with_options(
-            None, !offline,
+        .block_on(dytes::update::run::dytes::install_one_dependency(
+            dep_type, name, &version, !offline,
         ))
-        .map_err(|e| DytesError::failed(format!("更新失败: {e:#}")))?;
+        .map_err(|e| DytesError::failed(format!("安装失败: {e:#}")))?;
 
     if json {
         println!(

@@ -233,7 +233,8 @@ pub async fn update_app_info(
         println!("  下载完成: {}", local_filename);
     }
 
-    // 7. 写回远程配置，保留本地额外依赖（例如 design_plugins / design_soft）
+    // 7. 写回远程配置，保留本地额外依赖（core / sys / web / model）。
+    // design_plugins / design_soft 不写入应用 dytes.json，只记录在 dytes.lock。
     let local_config = Path::new(&app_dir).join("dytes.json");
     let merged_text = merge_local_dependencies(&local_config, &remote_app_info_text)
         .unwrap_or_else(|_| remote_app_info_text.clone());
@@ -260,4 +261,37 @@ pub async fn update_app_info(
 
     println!("  应用更新完成: {} v{}", name, remote_app_info.version);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_local_dependencies;
+
+    #[test]
+    fn merge_keeps_manifest_dependencies_but_drops_design_packages() {
+        let dir = tempfile::tempdir().unwrap();
+        let local_path = dir.path().join("dytes.json");
+        let local = serde_json::json!({
+            "auto_update": false,
+            "dependencies-sys": { "chatllm": "1.0.11" },
+            "dependencies-design-plugins": { "cdr_check_txt": "0.2.0" },
+            "dependencies-design-soft": { "vectorcraft": "0.17.0" }
+        });
+        std::fs::write(&local_path, local.to_string()).unwrap();
+
+        let remote = serde_json::json!({
+            "name": "piksel",
+            "version": "1.2.0",
+            "type": "app",
+            "dependencies-sys": { "database": "1.0.3" }
+        });
+        let merged = merge_local_dependencies(&local_path, &remote.to_string()).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&merged).unwrap();
+
+        assert_eq!(value["dependencies-sys"]["database"], "1.0.3");
+        assert_eq!(value["dependencies-sys"]["chatllm"], "1.0.11");
+        assert!(value.get("dependencies-design-plugins").is_none());
+        assert!(value.get("dependencies-design-soft").is_none());
+        assert_eq!(value["auto_update"], false);
+    }
 }

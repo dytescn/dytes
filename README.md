@@ -33,6 +33,10 @@
 | `design_soft` | `apps/<name>/` | `design_soft/` |
 | `model` | `models/` | `models/` |
 
+`design_plugins` / `design_soft` 由 `dytes install plugin` / `dytes install design-soft`
+或 `plugin_lib` / `designsoft` 安装，记录在 `dytes.lock` 与包目录清单中，不写入应用根
+`dytes.json`。
+
 ## GitHub Action
 
 ```yaml

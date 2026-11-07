@@ -121,11 +121,14 @@ dytes <command> [options]
   "dependencies-core": {},
   "dependencies-sys": {},
   "dependencies-web": {},
-  "dependencies-design-plugins": {},
-  "dependencies-design-soft": {},
   "dependencies-model": {}
 }
 ```
+
+> `design_plugins` / `design_soft` **不写入应用 `dytes.json`**。它们由
+> `dytes install plugin` / `dytes install design-soft`、`plugin_lib` 或 `designsoft`
+> 触发安装，记录在 `dytes.lock` 与包目录的 `dytes.json`。旧清单中的
+> `dependencies-design-plugins` / `dependencies-design-soft` 仍可读取，用于兼容。
 
 约束：
 
@@ -232,7 +235,7 @@ dytes install model <name>[@<version>]
    - `web` → `web/<name>/`；
    - `model` → `models/`；
    - `design_soft` → `apps/<name>/`；
-5. 写入 / 更新 `dytes.lock`；
+5. 写入 / 更新 `dytes.lock`；`design_plugins` / `design_soft` 不修改应用 `dytes.json`；
 6. `web` 与需要初始化的包执行 `init` 脚本；
 7. 可选调用 `plugin_lib.post_scan` 重新登记插件能力。
 
@@ -276,6 +279,7 @@ dytes update [--all] [--type <type,...>] [--offline] [--check] [--discover] [--i
 读取 dytes.json + dytes.lock
   → 先更新应用自身（app）
   → 按 core / sys / web / design_plugins / design_soft / model 顺序检查
+  → design_plugins / design_soft 以 dytes.lock 中已安装项为准；旧 dytes.json 字段仅兼容读取
   → 线上模式：以 packages.json 最新版本为准
   → 离线模式：按本地声明版本检查
   → 下载并解包
@@ -301,6 +305,7 @@ dytes update [--all] [--type <type,...>] [--offline] [--check] [--discover] [--i
 ### 6.5 要求
 
 - 更新应用自身后重新读取 `dytes.json`，依赖列表以新配置为准；
+- `design_plugins` / `design_soft` 不写回应用 `dytes.json`，只更新 `dytes.lock`；
 - 单个依赖失败不阻断其它依赖，但最终返回非 0；
 - `dytes.lock` 只在安装成功后更新；
 - 更新 `sys` 包时执行 `setup`；

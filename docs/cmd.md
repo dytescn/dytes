@@ -221,6 +221,7 @@ dytes install --gui
 - 当前 CLI 已接入 `plugin` / `design-soft`：复用更新引擎的下载、目录约定与锁文件；
 - 其余类型（app / core / sys / web / model）的安装引擎尚未接入；
 - 插件 → `plugins/<name>/`；设计软件 → `apps/<name>/`；
+- `plugin` / `design-soft` 只写 `dytes.lock` 与包目录 `dytes.json`，**不修改应用根 `dytes.json`**；
 - 安装失败不更新锁文件；
 - 重复安装同版本默认跳过，`--force` 重新下载覆盖；
 - `--version` 目前只接受与线上最新版本一致的版本。
@@ -310,7 +311,9 @@ dytes update --auto
   }
   ```
 
-- 检查范围为 `dytes.json` 依赖与 `dytes.lock` 中已安装的同类型包，未在清单声明的插件 / 软件也会被检查；
+- `design_plugins` / `design_soft` 以 `dytes.lock` 中已安装的包为准，应用 `dytes.json` 的
+  `dependencies-design-*` 仅用于兼容旧清单；
+- 其它类型检查 `dytes.json` 依赖与 `dytes.lock` 中已安装的同类型包；
 - 有更新时退出码为 `4`，JSON 仍写入 stdout。
 
 ---
@@ -462,6 +465,10 @@ dytes publish --dir <包目录>
 dytes install plugin cdrimex
 dytes install design-soft vectorcraft
 ```
+
+`design_plugins` / `design_soft` 的安装记录在 `dytes.lock` 和包目录的 `dytes.json`，
+不写入应用根 `dytes.json`。`plugin_lib` / `designsoft` 通过 `dytes install ... --json`
+调用安装，不需要在应用清单中声明这两个包。
 
 ---
 

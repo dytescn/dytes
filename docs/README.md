@@ -6,6 +6,7 @@
 | [cmd.md](cmd.md) | 全部命令、参数、示例与退出码 |
 | [todo.md](todo.md) | 改造任务与实施进度 |
 | [archive/piksel_install-notes.md](archive/piksel_install-notes.md) | 合并前三个 crate 的历史说明 |
+| [release-0.1.20.md](release-0.1.20.md) | 0.1.20：修复 scan FFI-Symbol 前缀，统一 setup.json 符号 |
 | [release-0.1.18.md](release-0.1.18.md) | 0.1.18：init 支持 setup.json，直接经 cyctron 执行 |
 | [release-0.1.17.md](release-0.1.17.md) | 0.1.17：init 实际执行/严格失败，插件安装触发扫描 |
 | [release-0.1.16.md](release-0.1.16.md) | 0.1.16：self-update 优先读取版本化清单 |

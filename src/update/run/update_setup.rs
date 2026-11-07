@@ -301,7 +301,7 @@ pub async fn scan_plugin_registry() -> Result<()> {
                 "Content-Type".to_string(),
                 "application/libary".to_string(),
             ),
-            ("FFI-Symbol".to_string(), "post_scan".to_string()),
+            ("FFI-Symbol".to_string(), "scan".to_string()),
         ]),
         body: serde_json::json!({ "dir": "./plugins", "persist": true }).to_string(),
         allow_error: false,

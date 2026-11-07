@@ -183,7 +183,13 @@ pub async fn send_http_requests(requests: Vec<HttpRequest>) -> Result<()> {
         let mut builder = client.request(method, &req.url);
 
         for (key, value) in &req.headers {
-            builder = builder.header(key, value);
+            // cyctron 会按 `<method>_<FFI-Symbol>` 拼符号；包内 setup.json 若误写
+            // `post_scan`，这里统一去掉 `post_` 前缀，避免拼成 `post_post_scan`。
+            if key.eq_ignore_ascii_case("FFI-Symbol") {
+                builder = builder.header(key, normalize_ffi_symbol(value));
+            } else {
+                builder = builder.header(key, value);
+            }
         }
 
         if !req.body.is_empty() {
@@ -702,4 +708,27 @@ fn parse_headers(headers_str: &str) -> HashMap<String, String> {
         }
     }
     map
+}
+
+
+/// 去掉 setup 请求里误带的 `post_` 前缀；兼容旧包的 `post_scan` / `post_post_scan`。
+fn normalize_ffi_symbol(value: &str) -> String {
+    let mut symbol = value.trim();
+    while let Some(rest) = symbol.strip_prefix("post_") {
+        symbol = rest;
+    }
+    symbol.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_ffi_symbol;
+
+    #[test]
+    fn strips_post_prefix_from_ffi_symbol() {
+        assert_eq!(normalize_ffi_symbol("post_scan"), "scan");
+        assert_eq!(normalize_ffi_symbol("scan"), "scan");
+        assert_eq!(normalize_ffi_symbol("post_post_scan"), "scan");
+        assert_eq!(normalize_ffi_symbol("  post_scan  "), "scan");
+    }
 }

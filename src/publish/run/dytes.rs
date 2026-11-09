@@ -275,7 +275,7 @@ pub fn publish_with_options(
     let uuid = ensure_manifest_uuid(json_path, &content)?;
     let manifest_text = fs::read_to_string(json_path)
         .with_context(|| format!("读取文件失败: {}", json_path.display()))?;
-    let mut manifest: Value =
+    let manifest: Value =
         serde_json::from_str(&manifest_text).with_context(|| "解析 dytes.json 失败")?;
 
     let platform = crate::publish::utils::platform::current_platform();

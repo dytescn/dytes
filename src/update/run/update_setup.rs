@@ -123,23 +123,27 @@ fn wait_for_port(port: u16, timeout: Duration) -> bool {
     false
 }
 
-/// 启动 cyctron.exe（公共导出）
+/// 启动 cyctron（公共导出）。
 pub fn start_cyctron() -> Result<()> {
-    let exe_name = if cfg!(windows) {
-        "cyctron.exe"
-    } else {
-        "cyctron"
-    };
+    // 发布产物按平台命名（cyctron.bin / cyctron.app）；安装器会创建无后缀
+    // 的 `cyctron` 命令入口。这里按优先级回退，兼容旧安装。
+    let candidates = ["./cyctron", "./cyctron.exe", "./cyctron.bin", "./cyctron.app"];
+    let exe = candidates
+        .iter()
+        .copied()
+        .find(|path| Path::new(path).is_file())
+        .ok_or_else(|| {
+            anyhow::anyhow!("未找到 cyctron（cyctron / cyctron.exe / cyctron.bin / cyctron.app）")
+        })?;
+    let exe_name = Path::new(exe)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(exe);
     if is_cyctron_running() {
         println!("  {exe_name} 已在运行");
         return Ok(());
     }
 
-    let exe = if cfg!(windows) {
-        "./cyctron.exe"
-    } else {
-        "./cyctron"
-    };
     println!("  启动: {}", exe);
 
     // 兼容旧安装：0.1.14 之前下载的 core 产物可能是 0644。

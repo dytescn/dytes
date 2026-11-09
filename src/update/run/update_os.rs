@@ -1,6 +1,7 @@
 use crate::shared::checksum::verify_download;
 use crate::update::utils::dytes::DytesConfig;
 use crate::update::utils::env::get_app_dir;
+use crate::update::utils::executable;
 use crate::update::utils::loader::{download_file, fetch_text};
 use crate::update::utils::lock::{get_package_version_from_lock, update_package_in_lock};
 use crate::update::utils::version::check_version;
@@ -172,6 +173,8 @@ pub async fn update_os_info(name: String, declared_version: String) -> Result<()
         )?;
         // S3 不保留执行位：cyctron / dytes / update 等 core 产物需要 0755。
         ensure_executable_if_binary(Path::new(&dest_path))?;
+        // Linux / macOS 的 .bin / .app 产物额外创建无后缀命令入口。
+        executable::install_command_alias(Path::new(&app_dir), dest_filename)?;
         println!("  下载完成: {}", dest_filename);
     }
 

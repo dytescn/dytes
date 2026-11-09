@@ -1,11 +1,16 @@
 use anyhow::{Context, Result};
+use serde_json::Value;
+use std::collections::HashSet;
 use std::fs;
+use std::path::Path;
 
 use crate::shared::checksum::verify_download;
 use crate::update::utils::dytes::DytesConfig;
 use crate::update::utils::env::get_app_dir;
 use crate::update::utils::loader::{download_file, fetch_text};
-use crate::update::utils::lock::{get_package_version_from_lock, update_package_in_lock};
+use crate::update::utils::lock::{
+    get_package_from_lock, get_package_version_from_lock, update_package_in_lock,
+};
 use crate::update::utils::version::check_version;
 
 /// 设计包类型：插件或设计软件
@@ -182,6 +187,10 @@ pub async fn update_design_info(
         .with_context(|| format!("保存 {} 失败", manifest_path))?;
     println!("  保存清单: {}", manifest_path);
 
+    // MCP 工具通过 transport.library_uuid 绑定真实能力库；安装完成后校验库
+    // 已落在 libary/ 且 uuid 一致，避免回调时 dlopen 失败。
+    verify_mcp_libraries(&package_dir, &app_dir)?;
+
     // 6. 设计插件额外注册到 libary，供 cyctron 加载
     if kind == DesignKind::Plugin {
         let lib_dir = format!("{}/libary", app_dir.trim_end_matches('/'));
@@ -228,4 +237,111 @@ pub async fn update_design_info(
         files,
         skipped: false,
     })
+}
+
+/// 返回 `mcp.json` 所在目录：优先包根，其次 `mcp/` 子目录。
+fn mcp_root(package: &Path) -> Option<std::path::PathBuf> {
+    if package.join("mcp.json").is_file() {
+        return Some(package.to_path_buf());
+    }
+    let nested = package.join("mcp");
+    if nested.join("mcp.json").is_file() {
+        return Some(nested);
+    }
+    None
+}
+
+/// 校验插件内所有 MCP 工具声明的库已安装且 uuid 一致。
+///
+/// 只校验同时提供 `transport.library` 与 `transport.library_uuid` 的工具；
+/// 普通本地插件（没有 MCP transport）跳过。
+fn verify_mcp_libraries(package_dir: &str, app_dir: &str) -> Result<()> {
+    let package = Path::new(package_dir);
+    let Some(root) = mcp_root(package) else {
+        return Ok(());
+    };
+    let manifest_path = root.join("mcp.json");
+    let text = fs::read_to_string(&manifest_path)
+        .with_context(|| format!("读取 {} 失败", manifest_path.display()))?;
+    let value: Value = serde_json::from_str(&text)
+        .with_context(|| format!("解析 {} 失败", manifest_path.display()))?;
+    let Some(tools) = value.get("tools").and_then(Value::as_array) else {
+        return Ok(());
+    };
+
+    let mut checked = HashSet::new();
+    for tool in tools {
+        let Some(file_name) = tool.as_str() else {
+            continue;
+        };
+        if file_name.contains('/') || file_name.contains('\\') {
+            continue;
+        }
+        let Ok(tool_text) = fs::read_to_string(root.join(file_name)) else {
+            continue;
+        };
+        let Ok(tool_value) = serde_json::from_str::<Value>(&tool_text) else {
+            continue;
+        };
+        let Some(transport) = tool_value.get("transport") else {
+            continue;
+        };
+        let Some(library) = transport.get("library").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(uuid) = transport.get("library_uuid").and_then(Value::as_str) else {
+            continue;
+        };
+        if !checked.insert((library.to_string(), uuid.to_string())) {
+            continue;
+        }
+        verify_mcp_library(app_dir, library, uuid)
+            .with_context(|| format!("MCP 工具 {file_name} 关联的库 {library} 校验失败"))?;
+    }
+    Ok(())
+}
+
+fn verify_mcp_library(app_dir: &str, library: &str, expected_uuid: &str) -> Result<()> {
+    let platform = crate::update::utils::platform::current_platform();
+    let ext = match platform.as_str() {
+        "windows" => "dll",
+        "macos" => "dylib",
+        _ => "so",
+    };
+    let lib_path = Path::new(app_dir)
+        .join("libary")
+        .join(format!("{library}.{ext}"));
+    if !lib_path.is_file() {
+        anyhow::bail!(
+            "库文件不存在: {}；请在插件 dytes.json 的 dependencies-sys 中声明 {}",
+            lib_path.display(),
+            library
+        );
+    }
+
+    let manifest_path = Path::new(app_dir)
+        .join("libary")
+        .join(library)
+        .join("dytes.json");
+    let actual_uuid = fs::read_to_string(&manifest_path)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|value| value.get("uuid").and_then(Value::as_str).map(str::to_string))
+        .or_else(|| {
+            get_package_from_lock(library)
+                .ok()
+                .flatten()
+                .and_then(|package| package.uuid)
+        });
+    let Some(actual_uuid) = actual_uuid else {
+        anyhow::bail!(
+            "无法读取库 {library} 的 uuid（{} 或 dytes.lock）",
+            manifest_path.display()
+        );
+    };
+    if actual_uuid != expected_uuid {
+        anyhow::bail!("库 {library} 的 uuid 不匹配：期望 {expected_uuid}，实际 {actual_uuid}");
+    }
+    println!("  MCP 库校验通过: {library} ({expected_uuid})");
+    Ok(())
 }

@@ -1,6 +1,7 @@
 use crate::shared::checksum::verify_download;
 use crate::update::utils::dytes::DytesConfig;
 use crate::update::utils::env::get_app_dir;
+use crate::update::utils::executable;
 use crate::update::utils::loader::download_file;
 use crate::update::utils::lock::{get_package_version_from_lock, update_package_in_lock};
 use crate::update::utils::version::check_version;
@@ -230,6 +231,9 @@ pub async fn update_app_info(
             dest_filename,
             &remote_app_info.checksums,
         )?;
+        if !is_html {
+            executable::install_command_alias(Path::new(&target_dir), &local_filename)?;
+        }
         println!("  下载完成: {}", local_filename);
     }
 

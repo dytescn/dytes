@@ -352,7 +352,7 @@ fn replace_binary(temp: &Path, target: &Path) -> Result<()> {
                 }
                 Err(error) => {
                     let _ = fs::rename(&backup, target);
-                    bail!("替换 dytes.exe 失败: {error}");
+                    bail!("替换 dytes 失败: {error}");
                 }
             },
             Err(error) => {
@@ -644,8 +644,8 @@ mod tests {
                 "type": "core",
                 "platform-exports": {
                     "windows": {"./target/release/dytes.exe": "dytes.exe"},
-                    "linux": {"./target/release/dytes": "dytes"},
-                    "macos": {"./target/release/dytes": "dytes"}
+                    "linux": {"./target/release/dytes": "dytes.bin"},
+                    "macos": {"./target/release/dytes": "dytes.app"}
                 }
             }"#,
         )
@@ -656,8 +656,8 @@ mod tests {
     fn picks_platform_binary() {
         let config = manifest();
         assert_eq!(binary_name(&config, "windows").unwrap(), "dytes.exe");
-        assert_eq!(binary_name(&config, "linux").unwrap(), "dytes");
-        assert_eq!(binary_name(&config, "macos").unwrap(), "dytes");
+        assert_eq!(binary_name(&config, "linux").unwrap(), "dytes.bin");
+        assert_eq!(binary_name(&config, "macos").unwrap(), "dytes.app");
     }
 
     #[test]
@@ -693,8 +693,8 @@ mod tests {
             "core/dytes/0.1.11/windows/dytes.exe"
         );
         assert_eq!(
-            s3_checksum_key("0.1.11", "linux", "dytes"),
-            "core/dytes/0.1.11/linux/dytes.sha256"
+            s3_checksum_key("0.1.11", "linux", "dytes.bin"),
+            "core/dytes/0.1.11/linux/dytes.bin.sha256"
         );
     }
 

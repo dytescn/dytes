@@ -1,6 +1,7 @@
 pub mod core;
 pub mod dytes;
 pub mod env;
+pub mod executable;
 pub mod loader;
 pub mod lock;
 pub mod platform;

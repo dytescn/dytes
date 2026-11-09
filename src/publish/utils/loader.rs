@@ -89,14 +89,17 @@ fn upload_path_to_s3(file_path: &str, bucket_name: &str, object_name: &str) -> b
             }
         };
 
-        match client
+        let mut request = client
             .put_object()
             .bucket(bucket_name)
             .key(object_name)
             .body(body)
-            .acl(aws_sdk_s3::types::ObjectCannedAcl::PublicRead)
-            .send()
-            .await
+            .acl(aws_sdk_s3::types::ObjectCannedAcl::PublicRead);
+        // 清单类对象使用短缓存，避免发布后 CDN 继续返回旧版本。
+        if object_name.ends_with(".json") || object_name.ends_with(".js") {
+            request = request.cache_control("no-cache, max-age=60");
+        }
+        match request.send().await
         {
             Ok(_) => true,
             Err(e) => {

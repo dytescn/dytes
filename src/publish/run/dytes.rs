@@ -1,6 +1,6 @@
 use crate::publish::utils::dytes::DytesConfig;
 use crate::publish::utils::loader::{
-    download_from_s3, list_keys, object_exists, upload_bytes, upload_file,
+    download_from_s3, list_keys, object_exists, read_object_text, upload_bytes, upload_file,
 };
 use crate::shared::checksum::{digest_file, FileChecksum};
 use anyhow::{bail, Context, Result};
@@ -379,7 +379,7 @@ pub fn publish_with_options(
             } else {
                 println!("   校验: SHA-256 {}", checksum.sha256);
             }
-            checksums.insert(remote_name_clean.to_string(), checksum);
+            checksums.insert(format!("{}/{}", platform, remote_name_clean), checksum);
         }
 
         println!();
@@ -396,25 +396,59 @@ pub fn publish_with_options(
     // 5. 上传带 checksums 的 dytes.json
     println!("上传 dytes.json...");
     let dytes_remote_path = format!("{}/dytes.json", remote_prefix);
-    let object = manifest
-        .as_object_mut()
-        .ok_or_else(|| anyhow::anyhow!("dytes.json 不是 JSON 对象"))?;
-    object.insert("checksums".to_string(), serde_json::to_value(&checksums)?);
-    let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
-    if !upload_bytes(&manifest_bytes, bucket, &dytes_remote_path) {
+    let versioned_manifest_path = format!("{}/{}/dytes.json", remote_prefix, version);
+
+    // 平台清单只包含当前平台的 checksums。
+    let mut platform_manifest = manifest.clone();
+    platform_manifest["checksums"] = serde_json::to_value(&checksums)?;
+    let platform_bytes = serde_json::to_vec_pretty(&platform_manifest)?;
+
+    // 未版本化 / 版本化清单合并其他平台已发布的 checksums。
+    // Linux 与 macOS 可能使用相同的远程文件名（例如 cyctron），
+    // 若各平台直接覆盖清单，后发布的平台会覆盖前一个平台的校验值。
+    let mut merged_checksums = checksums.clone();
+    for key in [&dytes_remote_path, &versioned_manifest_path] {
+        match read_object_text(bucket, key) {
+            Ok(Some(text)) => {
+                if let Ok(value) = serde_json::from_str::<Value>(&text) {
+                    if let Some(existing) = value.get("checksums").and_then(Value::as_object) {
+                        for (name, checksum) in existing {
+                            if merged_checksums.contains_key(name) {
+                                continue;
+                            }
+                            if let Ok(checksum) =
+                                serde_json::from_value::<FileChecksum>(checksum.clone())
+                            {
+                                merged_checksums.insert(name.clone(), checksum);
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(error) => println!("  读取已有清单失败，跳过 checksum 合并: {}", error),
+        }
+    }
+    let mut merged_manifest = manifest.clone();
+    merged_manifest["checksums"] = serde_json::to_value(&merged_checksums)?;
+    let merged_bytes = serde_json::to_vec_pretty(&merged_manifest)?;
+
+    if !upload_bytes(&merged_bytes, bucket, &dytes_remote_path) {
         bail!("dytes.json 上传失败，已中止发布");
     }
-    println!("  dytes.json 上传成功（{} 个文件校验）", checksums.len());
+    println!(
+        "  dytes.json 上传成功（{} 个文件校验）",
+        merged_checksums.len()
+    );
 
     // 5.1 同时发布版本化清单，供 `dytes update --pinned` / 发布自检读取。
-    let versioned_manifest_path = format!("{}/{}/dytes.json", remote_prefix, version);
-    if !upload_bytes(&manifest_bytes, bucket, &versioned_manifest_path) {
+    if !upload_bytes(&merged_bytes, bucket, &versioned_manifest_path) {
         bail!("版本化 dytes.json 上传失败，已中止发布");
     }
     println!("  版本化清单: {}", versioned_manifest_path);
-    if let Some(tag) = platform_tag {
-        let platform_manifest_path = format!("{}{}dytes.json", base_path, tag);
-        if !upload_bytes(&manifest_bytes, bucket, &platform_manifest_path) {
+    if platform_tag.is_some() {
+        let platform_manifest_path = format!("{}dytes.json", base_path);
+        if !upload_bytes(&platform_bytes, bucket, &platform_manifest_path) {
             bail!("平台版本化 dytes.json 上传失败，已中止发布");
         }
         println!("  平台清单: {}", platform_manifest_path);

@@ -130,6 +130,67 @@ pub fn upload_bytes(content: &[u8], bucket_name: &str, object_name: &str) -> boo
     false
 }
 
+/// 读取 S3 对象文本；对象不存在返回 `Ok(None)`。
+pub fn read_object_text(bucket_name: &str, object_name: &str) -> Result<Option<String>, String> {
+    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("创建运行时失败: {}", e))?;
+
+    rt.block_on(async {
+        let credentials = Credentials::new(
+            s3_settings().access_key.unwrap_or_default(),
+            s3_settings().secret_key.unwrap_or_default(),
+            None,
+            None,
+            "custom",
+        );
+
+        let config = aws_config::defaults(BehaviorVersion::latest())
+            .endpoint_url(s3_settings().endpoint)
+            .region(Region::new("us-east-1"))
+            .credentials_provider(credentials)
+            .load()
+            .await;
+
+        let config = Config::from(&config)
+            .to_builder()
+            .force_path_style(true)
+            .build();
+
+        let client = Client::from_conf(config);
+
+        match client
+            .get_object()
+            .bucket(bucket_name)
+            .key(object_name)
+            .send()
+            .await
+        {
+            Ok(output) => {
+                let data = output
+                    .body
+                    .collect()
+                    .await
+                    .map_err(|e| format!("读取 {} 失败: {}", object_name, e))?;
+                Ok(Some(
+                    String::from_utf8_lossy(&data.into_bytes()).to_string(),
+                ))
+            }
+            Err(e) => {
+                let text = format!("{} {:?}", e, e);
+                let lower = text.to_lowercase();
+                if text.contains("404")
+                    || text.contains("NotFound")
+                    || text.contains("NoSuchKey")
+                    || lower.contains("not found")
+                {
+                    Ok(None)
+                } else {
+                    Err(format!("GET {} 失败: {}", object_name, text))
+                }
+            }
+        }
+    })
+}
+
 /// 判断 S3 对象是否存在（HEAD）。404 / NoSuchKey 返回 false，其它错误返回 Err。
 pub fn object_exists(bucket_name: &str, object_name: &str) -> Result<bool, String> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| format!("创建运行时失败: {}", e))?;

@@ -114,13 +114,27 @@ pub fn verify_file(path: &Path, expected: &FileChecksum) -> Result<()> {
     Ok(())
 }
 
+/// 按当前平台查找 checksum：优先 `<platform>/<key>`，回退旧清单的 `<key>`。
+///
+/// Linux / macOS 可能发布同名产物（例如 `cyctron`），新清单使用平台前缀
+/// 区分；旧清单没有前缀时仍然兼容。
+fn lookup_checksum<'a>(
+    key: &str,
+    checksums: &'a std::collections::HashMap<String, FileChecksum>,
+) -> Option<&'a FileChecksum> {
+    let platform = crate::shared::platform::current_platform();
+    checksums
+        .get(&format!("{}/{}", platform, key))
+        .or_else(|| checksums.get(key))
+}
+
 /// 若远端清单包含该文件的 checksum，则校验；旧包没有 checksums 时保持兼容。
 pub fn verify_if_present(
     path: &Path,
     key: &str,
     checksums: &std::collections::HashMap<String, FileChecksum>,
 ) -> Result<()> {
-    if let Some(expected) = checksums.get(key) {
+    if let Some(expected) = lookup_checksum(key, checksums) {
         verify_file(path, expected)?;
         println!("  校验通过: {} ({})", key, expected.sha256);
     }
@@ -133,7 +147,7 @@ pub fn verify_download(
     key: &str,
     checksums: &std::collections::HashMap<String, FileChecksum>,
 ) -> Result<()> {
-    if let Some(expected) = checksums.get(key) {
+    if let Some(expected) = lookup_checksum(key, checksums) {
         if let Err(error) = verify_file(path, expected) {
             let _ = fs::remove_file(path);
             return Err(error.context(format!("校验失败，已删除文件: {}", path.display())));

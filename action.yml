@@ -21,7 +21,7 @@ inputs:
   version:
     description: "dytes release version to download"
     required: false
-    default: "0.1.21"
+    default: "0.1.22"
 
 runs:
   using: composite
@@ -60,11 +60,8 @@ runs:
       run: |
         set -euo pipefail
         cd "${DYTES_DIR}"
-        extra=()
         if [ -n "${DYTES_ARGS}" ]; then
           read -r -a extra <<< "${DYTES_ARGS}"
-        fi
-        if [ ${#extra[@]} -gt 0 ]; then
           dytes "${DYTES_COMMAND}" "${extra[@]}"
         else
           dytes "${DYTES_COMMAND}"

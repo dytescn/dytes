@@ -380,7 +380,8 @@ jobs:
           for platform in windows linux macos; do
             case "$platform" in
               windows) file="dytes.exe" ;;
-              *) file="dytes" ;;
+              linux) file="dytes.bin" ;;
+              macos) file="dytes.app" ;;
             esac
             check_status "$base/$version/$platform/$file?t=$(date +%s)"
             check_status "$base/latest/$platform/$file?t=$(date +%s)"
@@ -449,8 +450,8 @@ jobs:
                 version,
                 downloads: {
                   windows: `${base}/windows/dytes.exe`,
-                  linux: `${base}/linux/dytes`,
-                  macos: `${base}/macos/dytes`,
+                  linux: `${base}/linux/dytes.bin`,
+                  macos: `${base}/macos/dytes.app`,
                 },
               },
             }));

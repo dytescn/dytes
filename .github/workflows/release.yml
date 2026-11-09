@@ -73,14 +73,17 @@ jobs:
             platform: windows
             binary: dytes.exe
             artifact: dytes-windows.exe
+            package: dytes.exe
           - os: ubuntu-latest
             platform: linux
             binary: dytes
             artifact: dytes-linux
+            package: dytes.bin
           - os: macos-latest
             platform: macos
             binary: dytes
             artifact: dytes-macos
+            package: dytes.app
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -145,7 +148,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p upload artifact
-          cp "target/release/${{ matrix.binary }}" "upload/${{ matrix.binary }}"
+          cp "target/release/${{ matrix.binary }}" "upload/${{ matrix.package }}"
           cp "target/release/${{ matrix.binary }}" "artifact/${{ matrix.artifact }}"
           ls -l upload artifact
 
@@ -159,8 +162,8 @@ jobs:
             const file = process.argv[1];
             const hash = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
             fs.writeFileSync(file + '.sha256', hash + '  ' + require('path').basename(file) + '\n');
-          " "upload/${{ matrix.binary }}"
-          cat "upload/${{ matrix.binary }}.sha256"
+          " "upload/${{ matrix.package }}"
+          cat "upload/${{ matrix.package }}.sha256"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -199,7 +202,7 @@ jobs:
           UPYUN_BUCKET: ${{ secrets.UPYUN_BUCKET }}
           UPYUN_ENDPOINT: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
           PLATFORM: ${{ matrix.platform }}
-          BINARY: ${{ matrix.binary }}
+          BINARY: ${{ matrix.package }}
         run: |
           set -euo pipefail
           aws configure set default.s3.addressing_style path

@@ -1,6 +1,6 @@
 [package]
 name = "dytes"
-version = "0.1.25"
+version = "0.1.26"
 edition = "2021"
 description = "Piksel package installer, updater, publisher and manifest tool."
 license = "MIT"

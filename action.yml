@@ -21,7 +21,7 @@ inputs:
   version:
     description: "dytes release version to download"
     required: false
-    default: "0.1.25"
+    default: "0.1.26"
 
 runs:
   using: composite

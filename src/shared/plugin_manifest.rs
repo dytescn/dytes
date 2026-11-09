@@ -12,9 +12,11 @@ use serde_json::Value;
 use crate::shared::error::{DytesError, Result};
 
 /// `plugins_type` 允许值。
-pub const KNOWN_PLUGINS_TYPES: [&str; 4] = [
+pub const KNOWN_PLUGINS_TYPES: [&str; 6] = [
     "chat_think",
     "chat_reply",
+    "chat_plugins",
+    "sys_plugins",
     "plugins",
     "plugins_coreldraw",
 ];

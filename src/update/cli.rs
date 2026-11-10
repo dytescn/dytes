@@ -27,6 +27,9 @@ pub struct UpdateArgs {
     force: bool,
     #[arg(long)]
     dir: Option<PathBuf>,
+    /// 启动图形更新窗口
+    #[arg(long)]
+    gui: bool,
     #[arg(long)]
     json: bool,
 }
@@ -47,6 +50,20 @@ pub struct SelfUpdateArgs {
 }
 
 pub fn run(args: UpdateArgs) -> Result<()> {
+    if args.gui {
+        #[cfg(feature = "gui")]
+        {
+            return crate::utils::gui::run_update_gui(args.dir.clone())
+                .map_err(|error| DytesError::failed(format!("{error:#}")));
+        }
+        #[cfg(not(feature = "gui"))]
+        {
+            return Err(DytesError::args(
+                "当前构建未启用图形界面，请使用启用 `gui` feature 的构建",
+            ));
+        }
+    }
+
     if let Some(dir) = &args.dir {
         std::env::set_current_dir(dir)
             .map_err(|e| DytesError::failed(format!("切换目录失败: {e}")))?;

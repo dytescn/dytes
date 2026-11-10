@@ -1,5 +1,7 @@
 // Piksel 应用安装向导（仅 app 类型）。
-// 只负责选择安装位置与展示安装进度，实际安装由 dytes 内置引擎完成。
+// 设计 token 参考 funxdata/stylesheet：
+// 主文本 #334155、次要 #64748B、边框 #D1D5DB、背景 #F3F4F6；
+// 正文 14px、辅助 12px，按钮使用品牌色 #70ffaf。
 
 import { LineEdit } from "std-widgets.slint";
 
@@ -13,7 +15,7 @@ component PrimaryButton inherits Rectangle {
     width: 148px;
     height: 40px;
     border-radius: 8px;
-    background: !root.enabled ? #d5dbdf : (touch.has-hover ? #2f89c5 : #3498db);
+    background: !root.enabled ? #D1D5DB : (touch.has-hover ? #5ee89a : #70ffaf);
 
     touch := TouchArea {
         enabled: root.enabled;
@@ -25,7 +27,7 @@ component PrimaryButton inherits Rectangle {
 
     Text {
         text: root.text;
-        color: white;
+        color: #0f2d20;
         font-size: 14px;
         font-weight: 500;
         horizontal-alignment: center;
@@ -42,8 +44,8 @@ component SecondaryButton inherits Rectangle {
     height: 40px;
     border-radius: 8px;
     border-width: 1px;
-    border-color: #e6e9ec;
-    background: !root.enabled ? #f5f6f8 : (touch.has-hover ? #f5f6f8 : white);
+    border-color: #70ffaf;
+    background: !root.enabled ? #F3F4F6 : (touch.has-hover ? #d6ffe9 : #e8fff3);
 
     touch := TouchArea {
         enabled: root.enabled;
@@ -55,7 +57,7 @@ component SecondaryButton inherits Rectangle {
 
     Text {
         text: root.text;
-        color: #34495e;
+        color: #1b5e45;
         font-size: 14px;
         font-weight: 500;
         horizontal-alignment: center;
@@ -70,7 +72,7 @@ component ProgressBar inherits Rectangle {
 
     height: 4px;
     border-radius: 2px;
-    background: #ecf0f1;
+    background: #E5E7EB;
     clip: true;
 
     Rectangle {
@@ -79,7 +81,7 @@ component ProgressBar inherits Rectangle {
         height: parent.height;
         width: parent.width * root.value;
         border-radius: 2px;
-        background: #3498db;
+        background: #70ffaf;
     }
 }
 
@@ -99,20 +101,20 @@ component StepBar inherits HorizontalLayout {
             width: 7px;
             height: 7px;
             border-radius: 4px;
-            background: idx <= root.current ? #3498db : #d5dbdf;
+            background: idx <= root.current ? #70ffaf : #D1D5DB;
         }
 
         Text {
             text: label;
             font-size: 12px;
-            color: idx <= root.current ? #3498db : #95a5a6;
+            color: idx <= root.current ? #1b5e45 : #64748B;
             vertical-alignment: center;
         }
 
         if idx < 2 : Rectangle {
             width: 22px;
             height: 1px;
-            background: #e6e9ec;
+            background: #D1D5DB;
         }
     }
 }
@@ -126,7 +128,7 @@ component WelcomePage inherits Rectangle {
 
     VerticalLayout {
         alignment: center;
-        spacing: 14px;
+        spacing: 16px;
         padding: 40px;
 
         HorizontalLayout {
@@ -136,13 +138,13 @@ component WelcomePage inherits Rectangle {
                 width: 68px;
                 height: 68px;
                 border-radius: 18px;
-                background: #eaf4fb;
+                background: #E6FFF3;
 
                 Text {
                     text: "P";
                     font-size: 34px;
                     font-weight: 700;
-                    color: #3498db;
+                    color: #1b5e45;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -153,14 +155,14 @@ component WelcomePage inherits Rectangle {
             text: "安装 Piksel 应用";
             font-size: 24px;
             font-weight: 600;
-            color: #2c3e50;
+            color: #334155;
             horizontal-alignment: center;
         }
 
         Text {
             text: "选择安装位置后，将下载并安装应用及依赖。";
-            font-size: 13px;
-            color: #7f8c8d;
+            font-size: 14px;
+            color: #64748B;
             horizontal-alignment: center;
         }
 
@@ -190,52 +192,69 @@ component InstallPage inherits Rectangle {
 
     VerticalLayout {
         spacing: 16px;
-        padding: 34px;
+        padding: 32px;
 
         Text {
             text: "选择安装位置";
-            font-size: 22px;
+            font-size: 24px;
             font-weight: 600;
-            color: #2c3e50;
+            color: #334155;
         }
 
         Text {
             text: "Piksel 将安装到下面的目录，请选择有写入权限的位置。";
-            font-size: 13px;
-            color: #7f8c8d;
+            font-size: 14px;
+            color: #64748B;
         }
 
         Rectangle {
             height: 1px;
-            background: #e6e9ec;
-        }
-
-        Text {
-            text: "安装目录";
-            font-size: 12px;
-            color: #5d6d7e;
+            background: #D1D5DB;
         }
 
         HorizontalLayout {
+            height: 32px;
             spacing: 10px;
-            height: 40px;
+
+            Text {
+                text: "安装目录";
+                font-size: 12px;
+                color: #64748B;
+                vertical-alignment: center;
+            }
 
             Rectangle {
                 horizontal-stretch: 1;
-                border-radius: 8px;
-                border-width: 1px;
-                border-color: #e6e9ec;
-                background: #fafbfc;
-
-                LineEdit {
-                    text <=> root.install_path;
-                    height: 100%;
-                    font-size: 13px;
-                }
             }
 
             SecondaryButton {
                 text: "浏览...";
+                width: 88px;
+                height: 32px;
+                clicked => {
+                    root.browse();
+                }
+            }
+        }
+
+        Rectangle {
+            width: 100%;
+            height: 40px;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: #D1D5DB;
+            background: transparent;
+
+            LineEdit {
+                text <=> root.install_path;
+                width: 100%;
+                height: 100%;
+                font-size: 14px;
+                read-only: true;
+            }
+
+            TouchArea {
+                mouse-cursor: pointer;
                 clicked => {
                     root.browse();
                 }
@@ -244,8 +263,8 @@ component InstallPage inherits Rectangle {
 
         Text {
             text: "安装器只处理 app 类型包；其他包请使用 dytes install <type>。";
-            font-size: 11px;
-            color: #95a5a6;
+            font-size: 12px;
+            color: #64748B;
         }
 
         Rectangle {
@@ -293,16 +312,16 @@ component InstallingPage inherits Rectangle {
 
         Text {
             text: root.failed ? "安装未完成" : "正在安装";
-            font-size: 22px;
+            font-size: 24px;
             font-weight: 600;
-            color: root.failed ? #e74c3c : #2c3e50;
+            color: root.failed ? #EF4444 : #334155;
             horizontal-alignment: center;
         }
 
         Text {
             text: root.status_text;
-            font-size: 13px;
-            color: root.failed ? #e74c3c : #5d6d7e;
+            font-size: 14px;
+            color: root.failed ? #EF4444 : #64748B;
             horizontal-alignment: center;
             wrap: word-wrap;
         }
@@ -313,9 +332,9 @@ component InstallingPage inherits Rectangle {
 
             HorizontalLayout {
                 Text {
-                    text: "总进度";
-                    font-size: 11px;
-                    color: #7f8c8d;
+                    text: "下载进度";
+                    font-size: 12px;
+                    color: #64748B;
                 }
 
                 Rectangle {
@@ -324,40 +343,13 @@ component InstallingPage inherits Rectangle {
 
                 Text {
                     text: round(root.total_progress * 100) + "%";
-                    font-size: 11px;
-                    color: #7f8c8d;
+                    font-size: 12px;
+                    color: #64748B;
                 }
             }
 
             ProgressBar {
                 value: root.total_progress;
-            }
-        }
-
-        VerticalLayout {
-            spacing: 6px;
-            width: 100%;
-
-            HorizontalLayout {
-                Text {
-                    text: "当前文件";
-                    font-size: 11px;
-                    color: #7f8c8d;
-                }
-
-                Rectangle {
-                    horizontal-stretch: 1;
-                }
-
-                Text {
-                    text: round(root.file_progress * 100) + "%";
-                    font-size: 11px;
-                    color: #7f8c8d;
-                }
-            }
-
-            ProgressBar {
-                value: root.file_progress;
             }
         }
 
@@ -370,8 +362,8 @@ component InstallingPage inherits Rectangle {
 
         if !root.failed : Text {
             text: "安装过程中请勿关闭窗口";
-            font-size: 11px;
-            color: #95a5a6;
+            font-size: 12px;
+            color: #64748B;
             horizontal-alignment: center;
         }
     }
@@ -383,8 +375,10 @@ component FinishPage inherits Rectangle {
     width: 100%;
     height: 100%;
 
-    callback restart();
     in property <string> install_path;
+    in property <string> error_text: "";
+    callback launch_app();
+    callback close_window();
 
     VerticalLayout {
         alignment: center;
@@ -398,12 +392,12 @@ component FinishPage inherits Rectangle {
                 width: 68px;
                 height: 68px;
                 border-radius: 34px;
-                background: #eafaf1;
+                background: #ECFDF5;
 
                 Text {
                     text: "✓";
                     font-size: 32px;
-                    color: #27ae60;
+                    color: #10B981;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
@@ -414,30 +408,30 @@ component FinishPage inherits Rectangle {
             text: "安装完成";
             font-size: 24px;
             font-weight: 600;
-            color: #2c3e50;
+            color: #334155;
             horizontal-alignment: center;
         }
 
         Text {
             text: "Piksel 已安装到：";
             font-size: 12px;
-            color: #7f8c8d;
+            color: #64748B;
             horizontal-alignment: center;
         }
 
         Rectangle {
             border-radius: 8px;
-            background: #fafbfc;
+            background: #FFFFFF;
             border-width: 1px;
-            border-color: #e6e9ec;
+            border-color: #D1D5DB;
 
             VerticalLayout {
                 padding: 10px;
 
                 Text {
                     text: root.install_path;
-                    font-size: 11px;
-                    color: #5d6d7e;
+                    font-size: 12px;
+                    color: #64748B;
                     horizontal-alignment: center;
                     wrap: word-wrap;
                 }
@@ -448,9 +442,28 @@ component FinishPage inherits Rectangle {
             alignment: center;
 
             PrimaryButton {
-                text: "完成";
+                text: "启动 Piksel";
                 clicked => {
-                    root.restart();
+                    root.launch_app();
+                }
+            }
+        }
+
+        if root.error_text != "" : Text {
+            text: root.error_text;
+            font-size: 12px;
+            color: #EF4444;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+
+        HorizontalLayout {
+            alignment: center;
+
+            SecondaryButton {
+                text: "关闭";
+                clicked => {
+                    root.close_window();
                 }
             }
         }
@@ -463,13 +476,16 @@ export component MainWindow inherits Window {
     width: 720px;
     height: 500px;
     title: "Piksel 应用安装";
-    background: #f5f6f8;
+    background: #F3F4F6;
 
     in-out property <int> page_idx: 0;
     in-out property <string> install_path: "/opt/piksel";
     in-out property <bool> install_failed: false;
+    in-out property <string> launch_error: "";
     callback start_install();
     callback open_browse_dialog();
+    callback launch_app();
+    callback close_window();
 
     // 安装进度透传
     in-out property <float> total_progress: 0.0;
@@ -488,11 +504,11 @@ export component MainWindow inherits Window {
                 width: 40px;
                 height: 40px;
                 border-radius: 10px;
-                background: #3498db;
+                background: #70ffaf;
 
                 Text {
                     text: "P";
-                    color: white;
+                    color: #0f2d20;
                     font-size: 20px;
                     font-weight: 700;
                     horizontal-alignment: center;
@@ -502,19 +518,19 @@ export component MainWindow inherits Window {
 
             VerticalLayout {
                 alignment: center;
-                spacing: 1px;
+                spacing: 2px;
 
                 Text {
                     text: "Piksel";
                     font-size: 18px;
                     font-weight: 600;
-                    color: #2c3e50;
+                    color: #334155;
                 }
 
                 Text {
                     text: "应用安装向导";
-                    font-size: 11px;
-                    color: #7f8c8d;
+                    font-size: 12px;
+                    color: #64748B;
                 }
             }
 
@@ -531,9 +547,9 @@ export component MainWindow inherits Window {
         Rectangle {
             vertical-stretch: 1;
             border-radius: 14px;
-            background: white;
+            background: #FFFFFF;
             border-width: 1px;
-            border-color: #e6e9ec;
+            border-color: #D1D5DB;
 
             WelcomePage {
                 visible: root.page_idx == 0;
@@ -575,19 +591,20 @@ export component MainWindow inherits Window {
             FinishPage {
                 visible: root.page_idx == 3;
                 install_path: root.install_path;
-                restart => {
-                    root.install_failed = false;
-                    root.total_progress = 0;
-                    root.file_progress = 0;
-                    root.page_idx = 0;
+                error_text: root.launch_error;
+                launch_app => {
+                    root.launch_app();
+                }
+                close_window => {
+                    root.close_window();
                 }
             }
         }
 
         Text {
             text: "dytes · Piksel 包管理";
-            font-size: 10px;
-            color: #95a5a6;
+            font-size: 12px;
+            color: #64748B;
             horizontal-alignment: center;
         }
     }

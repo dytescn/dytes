@@ -22,5 +22,7 @@ fn main() {
     if env::var_os("CARGO_FEATURE_GUI").is_some() {
         println!("cargo:rerun-if-changed=ui/install.slint");
         slint_build::compile("ui/install.slint").expect("编译 ui/install.slint 失败");
+        println!("cargo:rerun-if-changed=ui/update.slint");
+        slint_build::compile("ui/update.slint").expect("编译 ui/update.slint 失败");
     }
 }

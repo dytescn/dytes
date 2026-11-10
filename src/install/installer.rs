@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::update::loader::fetch_text;
@@ -53,19 +54,29 @@ fn timestamp_secs() -> u64 {
 /// 执行完整安装流程：
 /// 1. 创建安装目录
 /// 2. 下载应用清单 `app/{APP_NAME}/dytes.json` 并写入安装目录
-/// 3. 在安装目录运行内置更新引擎（等价 `dytes update --auto`）
+/// 3. 在安装目录运行内置更新引擎，并透传其进度
 /// 4. 返回应用可执行文件路径（不自动启动）
-pub fn run_install<F>(install_dir: &Path, mut report: F) -> Result<PathBuf>
+pub fn run_install<F>(install_dir: &Path, report: F) -> Result<PathBuf>
 where
-    F: FnMut(InstallProgress),
+    F: FnMut(InstallProgress) + Send + 'static,
 {
+    let report = Arc::new(Mutex::new(report));
+    let emit = {
+        let report = report.clone();
+        move |progress: InstallProgress| {
+            if let Ok(mut report) = report.lock() {
+                report(progress);
+            }
+        }
+    };
+
     std::fs::create_dir_all(install_dir)
         .with_context(|| format!("创建安装目录失败: {}", install_dir.display()))?;
 
     let mut log = InstallLog::new(&install_dir.join("install.log"));
     log.write(&format!("安装目录: {}", install_dir.display()));
 
-    report(InstallProgress {
+    emit(InstallProgress {
         total: 0.0,
         file: 0.0,
         status: "准备安装...".to_string(),
@@ -76,7 +87,7 @@ where
     // 1. 获取应用配置并写入安装目录
     let app_config = runtime.block_on(async {
         log.write(&format!("获取应用配置: app/{}/dytes.json", APP_NAME));
-        report(InstallProgress {
+        emit(InstallProgress {
             total: 0.1,
             file: 0.0,
             status: "获取应用配置...".to_string(),
@@ -98,7 +109,7 @@ where
             .with_context(|| format!("写入 {} 失败", config_path.display()))?;
         log.write(&format!("应用配置已写入: {}", config_path.display()));
 
-        report(InstallProgress {
+        emit(InstallProgress {
             total: 0.2,
             file: 1.0,
             status: "配置准备完成".to_string(),
@@ -107,17 +118,27 @@ where
         Ok::<_, anyhow::Error>(app_config)
     })?;
 
-    // 2. 在安装目录运行内置更新引擎，不再依赖外部引导程序
+    // 2. 在安装目录运行内置更新引擎，把 0~100 的更新进度映射到 0.2~1.0
     log.write("开始执行内置更新引擎（等价 dytes update --auto）");
-    report(InstallProgress {
-        total: 0.5,
+    emit(InstallProgress {
+        total: 0.2,
         file: 0.0,
         status: "正在安装应用与依赖...".to_string(),
     });
 
+    let progress: crate::update::dytes::ProgressCallback = {
+        let emit = emit.clone();
+        Box::new(move |percent, status| {
+            emit(map_update_progress(percent, status));
+        })
+    };
+
     let update_result = {
         let _cwd_guard = CwdGuard::switch_to(install_dir)?;
-        runtime.block_on(crate::update::dytes::init_dytes_with_options(None, true))
+        runtime.block_on(crate::update::dytes::init_dytes_with_options(
+            Some(progress),
+            true,
+        ))
     };
     update_result.context("安装应用与依赖失败")?;
 
@@ -135,7 +156,7 @@ where
         }
     }
 
-    report(InstallProgress {
+    emit(InstallProgress {
         total: 1.0,
         file: 1.0,
         status: "安装完成".to_string(),
@@ -194,6 +215,16 @@ fn app_executable_name(app_name: &str) -> String {
     }
 }
 
+/// 把更新引擎的 0~100 进度映射到安装流程的 0.2~1.0。
+fn map_update_progress(percent: f32, status: &str) -> InstallProgress {
+    let ratio = percent.clamp(0.0, 100.0) / 100.0;
+    InstallProgress {
+        total: 0.2 + ratio * 0.8,
+        file: ratio,
+        status: status.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,5 +237,20 @@ mod tests {
         } else {
             assert_eq!(name, "piksel");
         }
+    }
+
+    #[test]
+    fn maps_update_progress_into_install_range() {
+        let start = map_update_progress(0.0, "开始");
+        assert!((start.total - 0.2).abs() < f32::EPSILON);
+        assert_eq!(start.file, 0.0);
+
+        let middle = map_update_progress(50.0, "进行中");
+        assert!((middle.total - 0.6).abs() < 1e-6);
+        assert!((middle.file - 0.5).abs() < 1e-6);
+
+        let done = map_update_progress(100.0, "完成");
+        assert!((done.total - 1.0).abs() < 1e-6);
+        assert!((done.file - 1.0).abs() < 1e-6);
     }
 }

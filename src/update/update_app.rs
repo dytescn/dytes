@@ -44,10 +44,12 @@ fn merge_local_dependencies(local_path: &Path, remote_text: &str) -> Result<Stri
     let mut remote: serde_json::Value = serde_json::from_str(remote_text)?;
     if let Ok(local_text) = std::fs::read_to_string(local_path) {
         if let Ok(local) = serde_json::from_str::<serde_json::Value>(&local_text) {
-            if let Some(auto) = local.get("auto_update") {
-                if remote.get("auto_update").is_none() {
-                    if let Some(obj) = remote.as_object_mut() {
-                        obj.insert("auto_update".to_string(), auto.clone());
+            for key in ["auto_update", "update_check_after"] {
+                if let Some(field) = local.get(key) {
+                    if remote.get(key).is_none() {
+                        if let Some(obj) = remote.as_object_mut() {
+                            obj.insert(key.to_string(), field.clone());
+                        }
                     }
                 }
             }

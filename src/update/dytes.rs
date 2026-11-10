@@ -11,6 +11,7 @@ use crate::update::lock::{
 use crate::utils::version::check_version;
 use anyhow::{anyhow, Result};
 use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::path::Path;
 
 /// 依赖图节点：类型 + 包名。
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -658,6 +659,42 @@ pub async fn discover_packages() -> Result<()> {
 /// 启动更新的节流窗口：1 天。
 const STARTUP_INTERVAL_SECS: u64 = 24 * 60 * 60;
 
+/// `dytes.json` 中记录下次更新检测时间的字段（Unix 秒）。
+pub const UPDATE_CHECK_AFTER: &str = "update_check_after";
+
+/// 两次更新检测之间的最短间隔。
+pub const UPDATE_CHECK_INTERVAL_SECS: u64 = STARTUP_INTERVAL_SECS;
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+/// 读取 `dytes.json` 中的下次更新检测时间。
+pub fn update_check_after(path: &Path) -> Option<u64> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    value.get(UPDATE_CHECK_AFTER)?.as_u64()
+}
+
+/// 把下次更新检测时间写入 `dytes.json`（Unix 秒）。
+pub fn set_update_check_after(dir: &Path, timestamp: u64) -> Result<()> {
+    let path = dir.join("dytes.json");
+    let text = std::fs::read_to_string(&path)?;
+    let mut value: serde_json::Value = serde_json::from_str(&text)?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("dytes.json 不是 JSON 对象"))?;
+    object.insert(
+        UPDATE_CHECK_AFTER.to_string(),
+        serde_json::json!(timestamp),
+    );
+    std::fs::write(&path, serde_json::to_string_pretty(&value)?)?;
+    Ok(())
+}
+
 /// 判断启动更新是否应执行：遵守 `auto_update`，并在 1 天内跳过。
 pub fn startup_allowed() -> Result<bool> {
     let config = read_dytes_config()?;
@@ -666,12 +703,16 @@ pub fn startup_allowed() -> Result<bool> {
         return Ok(false);
     }
 
+    let now = now_secs();
+    if let Some(after) = update_check_after(Path::new("dytes.json")) {
+        if now < after {
+            println!("  下次更新检测时间未到，跳过更新");
+            return Ok(false);
+        }
+    }
+
     if let Ok(text) = std::fs::read_to_string(".update_check") {
         if let Ok(value) = text.trim().parse::<u64>() {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_secs())
-                .unwrap_or(0);
             if now.saturating_sub(value) < STARTUP_INTERVAL_SECS {
                 println!("  最近已检查，跳过更新");
                 return Ok(false);
@@ -1181,5 +1222,16 @@ mod tests {
         assert!(config.dependencies_core.is_empty());
         assert!(config.dependencies_web.is_empty());
         assert!(config.dependencies_model.is_empty());
+    }
+
+    #[test]
+    fn update_check_after_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dytes.json");
+        std::fs::write(&path, r#"{"name":"x","version":"1.0.0","type":"app"}"#).unwrap();
+        assert_eq!(update_check_after(&path), None);
+
+        set_update_check_after(dir.path(), 12345).unwrap();
+        assert_eq!(update_check_after(&path), Some(12345));
     }
 }

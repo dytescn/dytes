@@ -37,14 +37,109 @@ jobs:
           ALLOW_SAME_VERSION: ${{ inputs.allow_same_version || 'false' }}
         run: |
           set -euo pipefail
-          args=(--check)
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            args+=(--tag "$GITHUB_REF_NAME")
-          fi
-          if [[ "$ALLOW_SAME_VERSION" == "true" ]]; then
-            args+=(--allow-same)
-          fi
-          node scripts/release.mjs "${args[@]}"
+          node <<'NODE'
+          const fs = require("fs");
+
+          const fail = (message) => {
+            console.error(`\n错误: ${message}\n`);
+            process.exit(1);
+          };
+          const read = (file) => fs.readFileSync(file, "utf8");
+
+          (async () => {
+            const manifest = JSON.parse(read("dytes.json")).version;
+            const cargo = read("Cargo.toml").match(
+              /\[package\][\s\S]*?^version = "([^"]+)"/m,
+            )?.[1];
+            const lock = read("Cargo.lock").match(
+              /\[\[package\]\]\r?\nname = "dytes"\r?\nversion = "([^"]+)"/,
+            )?.[1];
+
+            if (!cargo) fail("Cargo.toml 中未找到 [package] version");
+            if (!lock) fail('Cargo.lock 中未找到 name = "dytes" 的包');
+            if (manifest !== cargo || manifest !== lock) {
+              fail(
+                `版本不一致: dytes.json=${manifest} Cargo.toml=${cargo} Cargo.lock=${lock}`,
+              );
+            }
+            if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(manifest)) {
+              fail(`版本号不是合法 semver: ${manifest}`);
+            }
+            console.log(`当前版本: ${manifest}`);
+
+            const ref = process.env.GITHUB_REF || "";
+            if (ref.startsWith("refs/tags/")) {
+              const tag = ref.slice("refs/tags/".length);
+              if (tag !== `v${manifest}`) {
+                fail(`tag ${tag} 与清单版本不一致，应为 v${manifest}`);
+              }
+            }
+
+            const parseVersion = (value) => {
+              const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(value);
+              if (!match) fail(`无法比较版本: ${value}`);
+              return {
+                numbers: [Number(match[1]), Number(match[2]), Number(match[3])],
+                pre: match[4] || "",
+              };
+            };
+            const compareVersion = (a, b) => {
+              const left = parseVersion(a);
+              const right = parseVersion(b);
+              for (let i = 0; i < 3; i += 1) {
+                if (left.numbers[i] !== right.numbers[i]) {
+                  return left.numbers[i] > right.numbers[i] ? 1 : -1;
+                }
+              }
+              if (left.pre === right.pre) return 0;
+              if (!left.pre) return 1;
+              if (!right.pre) return -1;
+              return left.pre.localeCompare(right.pre, "en", { numeric: true });
+            };
+
+            const index =
+              process.env.DYTES_RELEASE_INDEX ||
+              "https://packages.funxdata.com/core/dytes/dytes.json";
+            let online = null;
+            try {
+              const url = `${index}${index.includes("?") ? "&" : "?"}t=${Date.now()}`;
+              const response = await fetch(url, {
+                headers: { "cache-control": "no-cache", pragma: "no-cache" },
+                signal: AbortSignal.timeout(15000),
+              });
+              if (response.status !== 404) {
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                if (!data.version) throw new Error("清单中没有 version 字段");
+                online = data.version;
+              }
+            } catch (error) {
+              console.log(
+                `警告: 读取线上版本失败 (${error.message})；跳过线上版本比较，继续发布`,
+              );
+            }
+
+            if (online) {
+              console.log(`线上版本: ${online}`);
+              const comparison = compareVersion(manifest, online);
+              if (comparison < 0) {
+                fail(`目标版本 ${manifest} 小于线上版本 ${online}，拒绝回退发布。`);
+              }
+              if (
+                comparison === 0 &&
+                process.env.ALLOW_SAME_VERSION !== "true"
+              ) {
+                fail(
+                  `目标版本 ${manifest} 与线上版本相同。每次发布必须升一个小版本；` +
+                    "确需重发请在手动触发时勾选 allow_same_version。",
+                );
+              }
+              console.log(`版本校验通过: ${manifest} > ${online}`);
+            }
+
+            console.log("校验通过 ✔");
+          })().catch((error) => fail(error.message));
+          NODE
 
       - name: Read version
         id: version

@@ -1,9 +1,15 @@
-pub mod run;
-pub mod utils;
-
-// 重新导出常用的类型和函数，方便外部使用
-pub use utils::version::{check_version, compare_versions};
-// pub use utils::env::{check_network, get_app_dir, get_temp_dir, get_exe_path};
-// pub use utils::loader::{download_file, fetch_text, fetch_json};
-pub use run::dytes::init_dytes;
-pub use run::update_app::update_app_info;
+pub mod cli;
+pub mod dytes;
+pub mod env;
+pub mod executable;
+pub mod loader;
+pub mod lock;
+pub mod script;
+pub mod self_update;
+pub mod update_app;
+pub mod update_design;
+pub mod update_model;
+pub mod update_os;
+pub mod update_setup;
+pub mod update_sys;
+pub mod update_webs;

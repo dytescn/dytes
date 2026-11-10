@@ -17,4 +17,10 @@ fn main() {
             }
         }
     }
+
+    // 仅在启用 `gui` feature 时编译 Slint 界面。
+    if env::var_os("CARGO_FEATURE_GUI").is_some() {
+        println!("cargo:rerun-if-changed=ui/install.slint");
+        slint_build::compile("ui/install.slint").expect("编译 ui/install.slint 失败");
+    }
 }

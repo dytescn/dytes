@@ -59,17 +59,17 @@
    `NoSuchKey` / `404` / `not found` 等文本，403 会被当成通用 `service error`，
    与真正的权限错误无法区分。
 3. **ListObjectsV2 兼容性**：又拍云 S3 兼容层对 `ListObjectsV2` 的支持可能不完整，
-   即使凭证正确也可能失败。旧版 `publish.exe` 在读不到索引时会直接“创建新的”，
+   即使凭证正确也可能失败。旧版发布逻辑在读不到索引时会直接“创建新的”，
    而新版为避免覆盖已有索引改为中止（`872d4de`），因此暴露出该问题。
 
 ### 4. 相关代码
 
 | 位置 | 作用 |
 | --- | --- |
-| `src/publish/run/dytes.rs::update_packages_json` | 读取索引；读取失败 + 列举失败 → 中止 |
-| `src/publish/utils/loader.rs::download_from_s3` | `GetObject`，错误统一为 `service error` |
-| `src/publish/utils/loader.rs::list_keys` | `ListObjectsV2`，用于判断索引是否真实存在 |
-| `src/shared/credentials.rs::effective_s3` / `builtin_s3` | 凭证来源与回退顺序 |
+| `src/publish/dytes.rs::update_packages_json` | 读取索引；读取失败 + 列举失败 → 中止 |
+| `src/publish/loader.rs::download_from_s3` | `GetObject`，错误统一为 `service error` |
+| `src/publish/loader.rs::list_keys` | `ListObjectsV2`，用于判断索引是否真实存在 |
+| `src/utils/credentials.rs::effective_s3` / `builtin_s3` | 凭证来源与回退顺序 |
 
 ### 5. 修复方向
 
@@ -111,7 +111,7 @@ export DYTES_S3_SECRET_KEY=<SK>
   `packages.json`（输出明确提示“可能覆盖其它包条目”）；不加 `--force` 仍安全中止。
 - 若列举成功并确认索引存在，即使 `--force` 也不会覆盖。
 - 错误信息会提示配置 `s3.access_key` / `s3.secret_key`（具备读 + 列举权限）。
-- 新增 6 个单元测试覆盖上述决策分支（`src/publish/run/dytes.rs::tests`）。
+- 新增 6 个单元测试覆盖上述决策分支（`src/publish/dytes.rs::tests`）。
 - 两个包的文件与 `dytes.json` **已上传成功**；
 - `packages.json` **未更新**，`dytes update` / `install` 暂时看不到 1.0.9 / 1.0.12；
 - 建议：配置读取权限后重跑 `dytes publish`；若接受风险，可使用 `dytes publish --force`。

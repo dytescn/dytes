@@ -1,7 +1,7 @@
 # dytes 已知问题
 
 > 记录实际使用中遇到的阻塞问题、复现方式与修复方向。
-> 最近更新：2026-11-03
+> 最近更新：2026-11-11
 
 ---
 
@@ -211,3 +211,66 @@ dytes self-update --json    # 机器可读结果
 - 校验 `<file>.sha256`；
 - Unix 直接原子替换；Windows 先尝试重命名，失败时由退出后的 helper 完成替换；
 - `--check` 不写文件；同版本默认跳过，`--force` 可强制重装。
+
+---
+
+## I-05 Linux 产物 glibc 版本过高（旧发行版无法启动）
+
+**发现日期**：2026-11-11
+**影响版本**：0.2.0 及更早版本的 Linux 产物（`dytes.bin`、core 包中的 `.bin`）
+**严重程度**：P0 —— 旧发行版上 dytes 无法启动，安装 / 更新链路中断
+**状态**：待修复（需先确定最低 glibc 基线）
+
+### 现象
+
+在 Linux 旧发行版上执行安装后的 `dytes.bin`，动态链接器直接拒绝启动：
+
+```text
+./dytes.bin: /lib64/libc.so.6: version `GLIBC_2.34' not found (required by ./dytes.bin)
+```
+
+实际缺失的符号版本以产物为准，可能是 `GLIBC_2.28` / `GLIBC_2.34` / `GLIBC_2.38` /
+`GLIBC_2.39`。带来的连锁问题：
+
+- 安装脚本下载完成后启动 dytes 失败；
+- `dytes self-update` 无法运行，无法通过自更新修复；
+- 依赖 core `dytes` 的应用安装流程无法完成。
+
+### 影响范围
+
+| 环境 | glibc |
+| --- | --- |
+| CentOS 7 | 2.17 |
+| Debian 10 | 2.28 |
+| Ubuntu 20.04 / Debian 11 | 2.31 |
+| Ubuntu 22.04 | 2.35 |
+| 当前构建机 `ubuntu-latest`（Ubuntu 24.04） | 2.39 |
+
+### 原因
+
+1. `release.yml` 的 Linux 构建使用 `ubuntu-latest`，当前对应 Ubuntu 24.04；
+2. Rust 默认动态链接构建机的 glibc，产物会记录构建时的符号版本；
+3. CI 没有限制产物依赖的 GLIBC 符号上限，也没有在旧 glibc 环境验证；
+4. GUI 依赖（Slint / X11 / Wayland）使 musl 静态链接不能直接作为方案；
+5. 没有在安装脚本或下载页标注最低 glibc 要求。
+
+### 修复方向
+
+1. **固定构建基线（最快）**：`runs-on` 改为 `ubuntu-22.04`（glibc 2.35），可覆盖
+   Ubuntu 22.04+，但 CentOS 7 / Ubuntu 20.04 仍不满足；
+2. **manylinux 容器构建（推荐）**：在 `quay.io/pypa/manylinux_2_28_x86_64` 中构建
+   （glibc 2.28）；若必须兼容 CentOS 7，则使用 `manylinux_2_17`，并确认
+   Slint / X11 / Wayland / fontconfig 等依赖可在容器内安装；
+3. **CI 增加产物检查**：构建后执行
+   `readelf --version-info upload/dytes.bin | grep GLIBC_`，超过允许基线则发布失败；
+4. **安装脚本预检**：执行前检查 `ldd --version`，低于基线时给出明确提示，
+   而不是让动态链接器报错；
+5. **文档标注**：在下载页与 README 写明最低 glibc / 发行版要求。
+
+### 备注
+
+- 需要先确认最低支持基线（是否必须兼容 CentOS 7 / Ubuntu 20.04），再选
+  `manylinux_2_17` 或 `manylinux_2_28`；
+- 已发布的 0.2.0 Linux 产物需要重新构建后覆盖：同版本重发需在手动触发时勾选
+  `allow_same_version`，或直接发布 0.2.1；
+- 具体报错发行版与缺失符号版本待补充。

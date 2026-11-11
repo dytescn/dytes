@@ -51,6 +51,17 @@ fn timestamp_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// 安装目录里的 dytes 可执行文件。
+///
+/// core 包安装时 Windows 为 `dytes.exe`，Linux / macOS 为 `dytes.bin` /
+/// `dytes.app` 并创建无后缀入口；按优先级查找，兼容旧安装。
+fn installed_dytes_path(install_dir: &Path) -> Option<PathBuf> {
+    ["dytes", "dytes.exe", "dytes.bin", "dytes.app"]
+        .iter()
+        .map(|name| install_dir.join(name))
+        .find(|path| path.is_file())
+}
+
 /// 执行完整安装流程：
 /// 1. 创建安装目录
 /// 2. 下载应用清单 `app/{APP_NAME}/dytes.json` 并写入安装目录
@@ -156,6 +167,27 @@ where
         }
     }
 
+    // 5. 安装完成后让安装目录里的 dytes 自更新一次：安装器自带的二进制
+    //    可能不是最新版本，直接走 S3 再拉一次；失败只记录，不影响安装结果。
+    match installed_dytes_path(install_dir) {
+        Some(dytes) => {
+            log.write(&format!(
+                "执行安装后自更新: {} self-update",
+                dytes.display()
+            ));
+            match Command::new(&dytes)
+                .arg("self-update")
+                .current_dir(install_dir)
+                .status()
+            {
+                Ok(status) if status.success() => log.write("安装后的 dytes 已自更新到最新版本"),
+                Ok(status) => log.write(&format!("安装后的 dytes 自更新失败: {status}")),
+                Err(error) => log.write(&format!("启动安装后的 dytes 自更新失败: {error}")),
+            }
+        }
+        None => log.write("安装目录中未找到 dytes，跳过安装后自更新"),
+    }
+
     emit(InstallProgress {
         total: 1.0,
         file: 1.0,
@@ -237,6 +269,24 @@ mod tests {
         } else {
             assert_eq!(name, "piksel");
         }
+    }
+
+    #[test]
+    fn finds_installed_dytes_by_platform_name() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(installed_dytes_path(dir.path()).is_none());
+
+        std::fs::write(dir.path().join("dytes.bin"), b"x").unwrap();
+        assert_eq!(
+            installed_dytes_path(dir.path()).unwrap(),
+            dir.path().join("dytes.bin")
+        );
+
+        std::fs::write(dir.path().join("dytes.exe"), b"x").unwrap();
+        assert_eq!(
+            installed_dytes_path(dir.path()).unwrap(),
+            dir.path().join("dytes.exe")
+        );
     }
 
     #[test]

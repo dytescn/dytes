@@ -339,13 +339,18 @@ jobs:
           cp dytes.json upload-manifest/dytes.json
           node -e "
             const fs = require('fs');
-            const version = require('./dytes.json').version;
+            const manifest = require('./dytes.json');
+            const version = manifest.version;
             const base = 'https://packages.funxdata.com/core/dytes/latest';
-            const downloads = {
-              windows: base + '/windows/dytes.exe',
-              linux: base + '/linux/dytes',
-              macos: base + '/macos/dytes',
-            };
+            const platformExports = manifest['platform-exports'] || {};
+            const downloads = {};
+            for (const [platform, exports] of Object.entries(platformExports)) {
+              const file = Object.values(exports)[0];
+              if (file) downloads[platform] = base + '/' + platform + '/' + file;
+            }
+            if (Object.keys(downloads).length === 0) {
+              throw new Error('dytes.json 缺少 platform-exports，无法生成下载链接');
+            }
             fs.writeFileSync(
               'upload-latest/version.js',
               'window.DYTES_RELEASE=' + JSON.stringify({ version, downloads }) + ';\n'
@@ -537,24 +542,27 @@ jobs:
       WEBSITE_DISPATCH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
       RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Dispatch dytes-release to website repository
         if: env.WEBSITE_DISPATCH_TOKEN != ''
         shell: bash
         run: |
           set -euo pipefail
           payload=$(node -e '
+            const fs = require("fs");
+            const manifest = JSON.parse(fs.readFileSync("dytes.json", "utf8"));
             const base = "https://packages.funxdata.com/core/dytes/latest";
-            const version = process.env.RELEASE_VERSION;
+            const version = process.env.RELEASE_VERSION || manifest.version;
+            const downloads = {};
+            for (const [platform, exports] of Object.entries(manifest["platform-exports"] || {})) {
+              const file = Object.values(exports)[0];
+              if (file) downloads[platform] = base + "/" + platform + "/" + file;
+            }
             console.log(JSON.stringify({
               event_type: "dytes-release",
-              client_payload: {
-                version,
-                downloads: {
-                  windows: `${base}/windows/dytes.exe`,
-                  linux: `${base}/linux/dytes.bin`,
-                  macos: `${base}/macos/dytes.app`,
-                },
-              },
+              client_payload: { version, downloads },
             }));
           ')
           curl -fsS -X POST \

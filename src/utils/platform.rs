@@ -48,6 +48,63 @@ pub fn remote_base(prefix: &str, version: &str, platform: Option<&str>) -> Strin
     }
 }
 
+/// 当前平台发布产物的可执行后缀。
+pub fn executable_suffix(platform: &str) -> Option<&'static str> {
+    match normalize_platform(platform).as_str() {
+        "windows" => Some(".exe"),
+        "linux" => Some(".bin"),
+        "macos" => Some(".app"),
+        _ => None,
+    }
+}
+
+/// 判断文件名是否像平台可执行产物（无后缀，或 `.exe` / `.bin` / `.app`）。
+fn looks_like_executable(filename: &str) -> bool {
+    match std::path::Path::new(filename)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+    {
+        None => true,
+        Some(ext) => matches!(ext.as_str(), "exe" | "bin" | "app"),
+    }
+}
+
+/// 校验平台专用导出文件的后缀。
+///
+/// 只关注可执行产物：若导出里存在无后缀 / `.exe` / `.bin` / `.app` 的文件，
+/// 则至少要求一个文件以当前平台后缀结尾。`.html`、`.dll`、`.so`、`.json`
+/// 等资源文件不参与校验；纯资源包直接通过。
+pub fn validate_platform_exports(
+    exports: &HashMap<String, String>,
+    platform: &str,
+) -> std::result::Result<(), String> {
+    let Some(suffix) = executable_suffix(platform) else {
+        return Ok(());
+    };
+    let binaries: Vec<&str> = exports
+        .values()
+        .map(String::as_str)
+        .filter(|name| looks_like_executable(name))
+        .collect();
+    if binaries.is_empty() {
+        return Ok(());
+    }
+    if binaries
+        .iter()
+        .any(|name| name.to_ascii_lowercase().ends_with(suffix))
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "导出文件没有 {} 产物（当前平台 {}）；实际导出: {}。\
+         请检查 dytes.json 的 platform-exports 是否按平台写上了正确后缀。",
+        suffix,
+        normalize_platform(platform),
+        binaries.join(", ")
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,5 +125,47 @@ mod tests {
         assert_eq!(normalize_platform(" osx "), "macos");
         assert_eq!(normalize_platform("linux"), "linux");
         assert_eq!(normalize_platform("freebsd"), "freebsd");
+    }
+
+    fn exports(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(source, dest)| (source.to_string(), dest.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn validates_platform_executable_suffix() {
+        assert!(validate_platform_exports(
+            &exports(&[("./target/release/dytes", "dytes.bin")]),
+            "linux"
+        )
+        .is_ok());
+        assert!(validate_platform_exports(
+            &exports(&[("./target/release/dytes", "dytes.exe")]),
+            "windows"
+        )
+        .is_ok());
+        // 资源文件不参与校验
+        assert!(validate_platform_exports(
+            &exports(&[("./dist/index.html", "index.html")]),
+            "linux"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn rejects_missing_platform_suffix() {
+        let result = validate_platform_exports(
+            &exports(&[("./target/release/dytes", "dytes")]),
+            "linux",
+        );
+        assert!(result.unwrap_err().contains(".bin"));
+
+        let result = validate_platform_exports(
+            &exports(&[("./target/release/piksel.exe", "piksel.exe")]),
+            "linux",
+        );
+        assert!(result.unwrap_err().contains(".bin"));
     }
 }

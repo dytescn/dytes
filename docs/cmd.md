@@ -143,11 +143,12 @@ dytes update [--type <type[,type...]>] [--check] [--offline]
 ```
 
 ```bash
-dytes self-update [--check] [--force] [--json] [--source auto|cdn|s3]
+dytes self-update [--check] [--force] [--json] [--source s3]
 ```
 
-`self-update` 从 `core/dytes` 清单读取最新版本，下载对应平台二进制并用同名
-`.sha256` 校验；`--check` 只比较版本。
+`self-update` 直接读取 S3 上的 `core/dytes` 清单获取最新版本，下载对应平台二进制
+并用同名 `.sha256` 校验；`--check` 只比较版本。不读取 `version.js`，CDN 来源也
+已停用（`--source cdn` 会报错），避免缓存导致读到旧版本或下载到不存在的文件。
 
 ## 6. `dytes publish`
 

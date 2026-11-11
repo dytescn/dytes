@@ -42,8 +42,8 @@ pub struct SelfUpdateArgs {
     /// 同版本也重新下载
     #[arg(long)]
     force: bool,
-    /// 下载来源：auto（S3 优先，CDN 回退）/ cdn / s3
-    #[arg(long, value_name = "auto|cdn|s3", default_value = "auto")]
+    /// 下载来源：s3（默认；CDN 已停用，避免缓存导致更新失败）
+    #[arg(long, value_name = "s3", default_value = "s3")]
     source: String,
     #[arg(long)]
     json: bool,
@@ -84,13 +84,25 @@ pub fn run(args: UpdateArgs) -> Result<()> {
 }
 
 pub fn run_self_update(args: SelfUpdateArgs) -> Result<()> {
-    let source = crate::update::self_update::UpdateSource::parse(&args.source)
-        .ok_or_else(|| DytesError::args("--source 只支持 auto / cdn / s3"))?;
+    match args.source.trim().to_ascii_lowercase().as_str() {
+        // `auto` 保留为兼容值：现在两者都只走 S3。
+        "s3" | "auto" => {}
+        "cdn" | "packages" => {
+            return Err(DytesError::args(
+                "--source cdn 已停用：self-update 只使用 S3，避免 CDN 缓存导致更新失败",
+            ))
+        }
+        other => {
+            return Err(DytesError::args(format!(
+                "--source 只支持 s3（收到 {other}）"
+            )))
+        }
+    }
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|e| DytesError::failed(format!("创建异步运行时失败: {e}")))?;
     runtime
         .block_on(crate::update::self_update::run(
-            args.check, args.force, args.json, source,
+            args.check, args.force, args.json,
         ))
         .map_err(|e| DytesError::failed(format!("自更新失败: {e:#}")))?;
     Ok(())

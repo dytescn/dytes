@@ -113,6 +113,17 @@ pub async fn update_design_info(
         platform_tag,
     );
 
+    // design_soft 是可直接启动的应用：平台专用清单必须带当前平台的可执行后缀。
+    if kind == DesignKind::Soft {
+        match crate::utils::platform::validate_platform_exports(exports, &platform) {
+            Ok(()) => {}
+            Err(message) if platform_tag.is_some() => {
+                anyhow::bail!("设计软件 {} 的导出文件与当前平台不匹配: {message}", name)
+            }
+            Err(message) => println!("  警告: {message}"),
+        }
+    }
+
     println!("  远程版本: {}", remote_info.version);
     println!("  平台: {}", platform);
     println!("  导出文件: {:?}", exports);

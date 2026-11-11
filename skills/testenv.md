@@ -75,8 +75,9 @@
    git push origin main --tags
    ```
 
-2. 等待 GitHub Actions 的 release workflow 完成，确认三平台产物、`latest`
-   清单和 `version.js` 已更新，`preflight` / `verify-release` 通过。
+2. 等待 GitHub Actions 的 release workflow 完成，确认三平台产物和 `latest`
+   清单已更新，`preflight` / `verify-release` 通过（`version.js` 仅供官网展示，
+   `dytes self-update` 不读取它）。
 
 3. 用当前 `dytes` 自更新到最新版并确认版本：
 

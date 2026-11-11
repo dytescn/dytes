@@ -169,7 +169,7 @@ jobs:
             binary: dytes.exe
             artifact: dytes-windows.exe
             package: dytes.exe
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             platform: linux
             binary: dytes
             artifact: dytes-linux
@@ -252,6 +252,25 @@ jobs:
           cp "target/release/${{ matrix.binary }}" "upload/${{ matrix.package }}"
           cp "target/release/${{ matrix.binary }}" "artifact/${{ matrix.artifact }}"
           ls -l upload artifact
+
+      # 防止构建机漂移把 glibc 基线抬高（ubuntu-latest 已从 22.04 升到 24.04）。
+      - name: Verify glibc baseline
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="upload/${{ matrix.package }}"
+          baseline="2.35"
+          symbols=$(readelf --version-info "$binary" \
+            | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' \
+            | sed 's/^GLIBC_//' | sort -V -u)
+          max=$(printf '%s\n' "$symbols" | tail -n1 || true)
+          echo "GLIBC 符号: $(printf '%s ' $symbols)"
+          echo "最大 GLIBC 版本: ${max:-无}（基线 $baseline）"
+          if [ -n "$max" ] && [ "$(printf '%s\n%s\n' "$max" "$baseline" | sort -V | tail -n1)" != "$baseline" ]; then
+            echo "::error::产物依赖 GLIBC_$max，超过基线 $baseline；请固定 Linux 构建机或改用 manylinux 容器"
+            exit 1
+          fi
 
       - name: Write SHA-256 checksum
         shell: bash

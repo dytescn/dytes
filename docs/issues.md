@@ -219,7 +219,7 @@ dytes self-update --json    # 机器可读结果
 **发现日期**：2026-11-11
 **影响版本**：0.2.0 及更早版本的 Linux 产物（`dytes.bin`、core 包中的 `.bin`）
 **严重程度**：P0 —— 旧发行版上 dytes 无法启动，安装 / 更新链路中断
-**状态**：待修复（需先确定最低 glibc 基线）
+**状态**：0.2.1 已将 Linux 构建固定到 Ubuntu 22.04（glibc 2.35），并增加产物 GLIBC 上限检查；更低基线（manylinux）待后续评估
 
 ### 现象
 
@@ -256,21 +256,22 @@ dytes self-update --json    # 机器可读结果
 
 ### 修复方向
 
-1. **固定构建基线（最快）**：`runs-on` 改为 `ubuntu-22.04`（glibc 2.35），可覆盖
-   Ubuntu 22.04+，但 CentOS 7 / Ubuntu 20.04 仍不满足；
-2. **manylinux 容器构建（推荐）**：在 `quay.io/pypa/manylinux_2_28_x86_64` 中构建
+1. **固定构建基线（0.2.1 已实施）**：Linux 构建机固定为 `ubuntu-22.04`
+   （glibc 2.35），并在构建后检查产物的 GLIBC 符号上限，防止 `ubuntu-latest`
+   再次升级后基线漂移；覆盖 Ubuntu 22.04+，CentOS 7 / Ubuntu 20.04 / Debian 10/11
+   仍不满足；
+2. **manylinux 容器构建（后续）**：在 `quay.io/pypa/manylinux_2_28_x86_64` 中构建
    （glibc 2.28）；若必须兼容 CentOS 7，则使用 `manylinux_2_17`，并确认
    Slint / X11 / Wayland / fontconfig 等依赖可在容器内安装；
-3. **CI 增加产物检查**：构建后执行
-   `readelf --version-info upload/dytes.bin | grep GLIBC_`，超过允许基线则发布失败；
+3. **CI 增加产物检查（0.2.1 已实施）**：构建后执行
+   `readelf --version-info upload/dytes.bin | grep GLIBC_`，超过 2.35 则发布失败；
 4. **安装脚本预检**：执行前检查 `ldd --version`，低于基线时给出明确提示，
    而不是让动态链接器报错；
 5. **文档标注**：在下载页与 README 写明最低 glibc / 发行版要求。
 
 ### 备注
 
-- 需要先确认最低支持基线（是否必须兼容 CentOS 7 / Ubuntu 20.04），再选
-  `manylinux_2_17` 或 `manylinux_2_28`；
-- 已发布的 0.2.0 Linux 产物需要重新构建后覆盖：同版本重发需在手动触发时勾选
-  `allow_same_version`，或直接发布 0.2.1；
+- 0.2.1 的基线为 glibc 2.35（Ubuntu 22.04）；如需覆盖 Ubuntu 20.04 / Debian 10，
+  后续需切到 manylinux 构建；
+- 0.2.0 的 Linux 产物仍有该问题，需升级到 0.2.1；
 - 具体报错发行版与缺失符号版本待补充。

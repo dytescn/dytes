@@ -1,6 +1,7 @@
 # dytes 命令清单
 
 > 包模型与设计见 [dytes.md](dytes.md)。测试环境见 [../skills/testenv.md](../skills/testenv.md)。
+> 每个命令的详细规划与用法见 [commands/](commands/README.md)。
 
 ## 1. 命令总览
 
@@ -10,6 +11,7 @@ dytes update       检查并安装更新
 dytes self-update  检查并升级 dytes 自身
 dytes publish      发布当前包
 dytes check        校验包清单
+dytes test         本地包自检并离线演练安装
 dytes init         初始化 dytes.json
 dytes config       S3 凭证与工具配置
 dytes help         帮助
@@ -178,7 +180,39 @@ dytes check [<dir>] [--type <type>] [--platform <platform>] [--manifest-only] [-
 校验 `dytes.json` 可解析、类型匹配、导出文件存在；设计插件执行完整规则
 （`plugins_type`、`targets`、`use_ai`、`mcp`、skills 等）。失败退出码为 `3`。
 
-## 8. `dytes init`
+## 8. `dytes test`
+
+```bash
+dytes test [<dir>] [--type <type>] [--platform <platform>]
+           [--manifest-only] [--work-dir <path>] [--keep] [--json]
+```
+
+统一管理包的本地测试环境：
+
+1. 自动创建 `<包目录>/.dytes/`，并把 `.dytes/` 写入包根 `.gitignore`；
+2. 复用 `dytes check` 的规则校验清单与导出；
+3. 把 `test-dependency` 声明的本地已安装依赖复制到 `.dytes/env/`；
+4. 在 `.dytes/` 内按平台安装布局复制导出文件与 init 脚本，写入并回读
+   `dytes.lock`。
+
+`test-dependency` 按包类型分组，例如：
+
+```json
+"test-dependency": {
+  "sys": { "info_lib": "0.1.0" },
+  "web": { "setting": "0.2.0" }
+}
+```
+
+- 默认演练目录：`.dytes/run-<pid>/dytes-test-<时间戳>`；
+- `--work-dir` 只能是 `.dytes/` 内的相对路径；默认清理，`--keep` 保留；
+- `.dytes/env/` 每次执行前重建，依赖从本地安装目录复制，不访问网络；
+- 拒绝绝对路径、盘符与 `..`；清单含 `checksums` 时校验摘要；
+- 自检、依赖复制或演练失败返回 `3`。
+
+详细规划见 [commands/test.md](commands/test.md)。
+
+## 9. `dytes init`
 
 ```bash
 dytes init [--type <type>] [--name <name>] [--version <ver>]
@@ -197,12 +231,13 @@ dytes init [--type <type>] [--name <name>] [--version <ver>]
 | `design_soft` | 单文件 exe |
 | `model` | 模型文件 |
 
-## 9. 推荐工作流
+## 10. 推荐工作流
 
 ```bash
 dytes config set s3.bucket packages
 dytes init --type sys --name info_lib
 dytes check
+dytes test
 dytes publish --dry-run
 dytes publish
 

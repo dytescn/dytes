@@ -6,6 +6,7 @@
 | --- | --- |
 | [dytes.md](dytes.md) | 设计、包模型与关键行为 |
 | [cmd.md](cmd.md) | 命令、参数与退出码 |
+| [commands/](commands/README.md) | 每个子命令的详细规划与用法 |
 | [action.md](action.md) | GitHub Action 用法 |
 | [issues.md](issues.md) | 已知问题与排查记录 |
 

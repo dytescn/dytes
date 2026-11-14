@@ -2,15 +2,23 @@
 
 ## 1. 测试目录
 
-- 所有本地测试的临时文件统一放在仓库根目录的 `.dytes/` 下。
-- `.dytes/` 已在 `.gitignore` 中屏蔽，不得提交任何测试产物。
+- 所有本地测试的临时文件统一放在包目录的 `.dytes/` 下。
+- `.dytes/` 不存在时由 `dytes test` 自动创建，并自动写入包根 `.gitignore`；
+  不得提交任何测试产物。
 - 每个测试使用独立子目录：`.dytes/run-<pid>/<test-name>/`，避免并发冲突。
+- 测试依赖统一复制到 `.dytes/env/`，不修改真实安装目录。
 - 测试结束保留现场便于排查；整个 `.dytes/` 可随时手动删除。
 
 ## 2. 目录结构
 
 ```text
 .dytes/
+├── env/                 # dytes test 的依赖环境（每次重建）
+│   ├── libary/
+│   ├── web/<name>/
+│   ├── plugins/<name>/
+│   ├── apps/<name>/
+│   └── models/<name>/
 └── run-<pid>/
     └── <test-name>/
         ├── work/        # 命令工作目录
@@ -18,6 +26,18 @@
         ├── logs/        # 输出与日志
         └── config.toml  # DYTES_CONFIG
 ```
+
+`dytes test` 的依赖来源由 `dytes.json` 的 `test-dependency` 声明：
+
+```json
+"test-dependency": {
+  "sys": { "info_lib": "0.1.0" },
+  "web": { "setting": "0.2.0" }
+}
+```
+
+默认从包目录（或 `DYTES_APP_DIR`）复制本地已安装的依赖到 `.dytes/env/`，
+不访问网络。详细行为见 [../docs/commands/test.md](../docs/commands/test.md)。
 
 ## 3. 环境隔离
 

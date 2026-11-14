@@ -11,10 +11,11 @@ Piksel 包管理工具：单一 Rust 二进制，负责应用、插件与依赖�
 | `dytes self-update` | 检查并升级 dytes 自身 |
 | `dytes publish` | 发布当前包；`--dry-run` 只预览 |
 | `dytes check` | 校验包清单 |
+| `dytes test` | 本地包自检、构建 `.dytes` 测试环境并演练安装 |
 | `dytes init` | 初始化 `dytes.json` |
 | `dytes config` | 管理 S3 凭证与平台配置 |
 
-完整参数与退出码见 [docs/cmd.md](docs/cmd.md)。
+完整参数与退出码见 [docs/cmd.md](docs/cmd.md)，每个命令的详细规划见 [docs/commands/](docs/commands/README.md)。
 
 ## 快速开始
 
@@ -42,11 +43,20 @@ cargo test --locked
 cargo clippy --all-targets -- -D warnings
 ```
 
-图形安装器需要启用 `gui` feature：
+默认构建不包含 GUI，用于 GitHub Action：
+
+```bash
+cargo build --release --locked
+```
+
+对外发布需要启用 `gui` feature：
 
 ```bash
 cargo build --release --features gui
 ```
+
+发布流程共 4 个构建：Windows / Linux / macOS 三个带 GUI 的发布构建，
+以及 1 个 Linux 无 GUI 的 Action 构建。
 
 ## 文档
 

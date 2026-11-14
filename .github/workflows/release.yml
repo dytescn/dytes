@@ -151,7 +151,7 @@ jobs:
           echo "Release version: $version"
 
   build:
-    name: Build ${{ matrix.platform }}
+    name: Build GUI ${{ matrix.platform }}
     needs: preflight
     runs-on: ${{ matrix.os }}
     environment: product
@@ -172,12 +172,12 @@ jobs:
           - os: ubuntu-22.04
             platform: linux
             binary: dytes
-            artifact: dytes-linux
+            artifact: dytes-linux.bin
             package: dytes.bin
           - os: macos-latest
             platform: macos
             binary: dytes
-            artifact: dytes-macos
+            artifact: dytes-macos.app
             package: dytes.app
     steps:
       - name: Checkout repository
@@ -331,6 +331,60 @@ jobs:
             --cache-control "no-cache, max-age=60"
           echo "已为 latest/$PLATFORM/$BINARY 设置短缓存"
 
+  build-action:
+    name: Build action (Linux, no GUI)
+    needs: preflight
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Test library (no GUI)
+        shell: bash
+        run: cargo test --lib --locked
+
+      - name: Build dytes (no GUI)
+        run: cargo build --release --locked
+
+      - name: Prepare action artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          cp target/release/dytes artifact/dytes-action.bin
+          ls -l artifact
+
+      # 与 GUI Linux 构建保持相同的 glibc 基线，避免 action 资产在旧 runner 上不可用。
+      - name: Verify glibc baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="artifact/dytes-action.bin"
+          baseline="2.35"
+          symbols=$(readelf --version-info "$binary" \
+            | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' \
+            | sed 's/^GLIBC_//' | sort -V -u)
+          max=$(printf '%s\n' "$symbols" | tail -n1 || true)
+          echo "GLIBC 符号: $(printf '%s ' $symbols)"
+          echo "最大 GLIBC 版本: ${max:-无}（基线 $baseline）"
+          if [ -n "$max" ] && [ "$(printf '%s\n%s\n' "$max" "$baseline" | sort -V | tail -n1)" != "$baseline" ]; then
+            echo "::error::产物依赖 GLIBC_$max，超过基线 $baseline；请固定 Linux 构建机或改用 manylinux 容器"
+            exit 1
+          fi
+
+      - name: Upload action artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dytes-action
+          path: artifact/
+          if-no-files-found: error
+
   publish-manifest:
     name: Publish dytes.json
     needs:
@@ -439,6 +493,7 @@ jobs:
     needs:
       - preflight
       - build
+      - build-action
       - publish-manifest
     runs-on: ubuntu-latest
     permissions:

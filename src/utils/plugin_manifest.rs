@@ -38,7 +38,7 @@ pub struct CheckItem {
 }
 
 /// 一次清单校验的全部结果。
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct CheckReport {
     pub items: Vec<CheckItem>,
 }

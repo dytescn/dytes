@@ -81,6 +81,11 @@ pub struct DytesConfig {
     #[serde(default)]
     #[serde(rename = "dependencies-model")]
     pub dependencies_model: HashMap<String, String>,
+    /// 测试环境依赖：按包类型分组，例如
+    /// `{"sys": {"info_lib": "0.1.0"}, "web": {"setup": "0.2.0"}}`。
+    /// `dytes test` 会把本地已安装的对应依赖复制到 `.dytes/env`。
+    #[serde(default, rename = "test-dependency")]
+    pub test_dependency: HashMap<String, HashMap<String, String>>,
     #[serde(default)]
     pub exports: HashMap<String, String>,
     #[serde(default, rename = "platform-exports")]
@@ -279,6 +284,14 @@ pub fn print_config_info(config: &DytesConfig) {
     );
     println!("  设计软件: {} 个", config.dependencies_design_soft.len());
     println!("  模型: {} 个", config.dependencies_model.len());
+    if !config.test_dependency.is_empty() {
+        let count: usize = config
+            .test_dependency
+            .values()
+            .map(HashMap::len)
+            .sum();
+        println!("  测试依赖: {} 个", count);
+    }
 
     if !config.exports.is_empty() {
         println!("\n导出文件:");
@@ -328,6 +341,13 @@ impl DytesConfig {
             return Err(DytesError::config(
                 "dytes.json 缺少 exports / platform-exports",
             ));
+        }
+        for pkg_type in self.test_dependency.keys() {
+            if DependencyType::from_name(pkg_type).is_none() {
+                return Err(DytesError::config(format!(
+                    "test-dependency 包含未知包类型: {pkg_type}"
+                )));
+            }
         }
         Ok(())
     }

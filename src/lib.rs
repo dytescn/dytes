@@ -3,5 +3,6 @@
 pub mod init;
 pub mod install;
 pub mod publish;
+pub mod test;
 pub mod update;
 pub mod utils;

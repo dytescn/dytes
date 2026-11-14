@@ -187,17 +187,33 @@ pub fn run(args: PublishArgs) -> Result<()> {
     .map_err(|error| DytesError::failed(format!("{error:#}")))
 }
 
-pub fn run_check(args: CheckArgs) -> Result<()> {
-    let dir = args.dir.unwrap_or(std::env::current_dir()?);
+/// 一次清单校验的完整结果，供 `check` 与 `test` 复用。
+pub struct CheckOutcome {
+    pub config: DytesConfig,
+    pub manifest_text: String,
+    pub report: CheckReport,
+    pub platform: String,
+}
+
+/// 只做校验、不打印，返回清单、配置与逐项结果。
+///
+/// 类型不匹配、清单无法读取等前置错误直接返回 `Err`；校验项失败则体现在
+/// `report.items` 中，由调用方决定如何输出。
+pub fn evaluate_check(
+    dir: &Path,
+    expected_type: Option<&str>,
+    platform: &str,
+    manifest_only: bool,
+) -> Result<CheckOutcome> {
     let config_path = dir.join("dytes.json");
     let text = fs::read_to_string(&config_path)
         .map_err(|e| DytesError::config(format!("读取 {} 失败: {e}", config_path.display())))?;
     let manifest: serde_json::Value = serde_json::from_str(&text)
         .map_err(|e| DytesError::config(format!("解析 {} 失败: {e}", config_path.display())))?;
-    let config = DytesConfig::read_with(&config_path, args.manifest_only)?;
+    let config = DytesConfig::read_with(&config_path, manifest_only)?;
     let pkg_type = config.package_type()?;
 
-    if let Some(expected) = args.pkg_type.as_deref() {
+    if let Some(expected) = expected_type {
         let expected = PackageType::parse(expected)
             .ok_or_else(|| DytesError::args(format!("未知包类型: {expected}")))?;
         if expected != pkg_type {
@@ -209,18 +225,17 @@ pub fn run_check(args: CheckArgs) -> Result<()> {
         }
     }
 
-    let platform = args.platform.unwrap_or_else(platform::current_platform);
     let mut report = CheckReport::default();
     report.pass("dytes.json 可解析", config_path.display().to_string());
 
     match pkg_type {
         PackageType::DesignPlugins => {
             report.extend(plugin_manifest::check_design_plugin(
-                &dir, &manifest, &platform,
+                dir, &manifest, platform,
             ));
         }
-        _ if args.manifest_only => {}
-        _ => match platform::select_exports(&config, &platform) {
+        _ if manifest_only => {}
+        _ => match platform::select_exports(&config, platform) {
             Some((exports, _)) if !exports.is_empty() => {
                 report.pass("exports 非空", format!("{} 个", exports.len()));
                 for source in exports.keys() {
@@ -236,6 +251,25 @@ pub fn run_check(args: CheckArgs) -> Result<()> {
             None => report.fail("当前平台导出", format!("platform-exports 缺少 {platform}")),
         },
     }
+
+    Ok(CheckOutcome {
+        config,
+        manifest_text: text,
+        report,
+        platform: platform.to_string(),
+    })
+}
+
+pub fn run_check(args: CheckArgs) -> Result<()> {
+    let dir = args.dir.unwrap_or(std::env::current_dir()?);
+    let platform = args.platform.unwrap_or_else(platform::current_platform);
+    let outcome = evaluate_check(
+        &dir,
+        args.pkg_type.as_deref(),
+        &platform,
+        args.manifest_only,
+    )?;
+    let report = outcome.report;
 
     if args.json {
         let checks: Vec<serde_json::Value> = report

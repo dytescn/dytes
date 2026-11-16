@@ -1,7 +1,7 @@
 # dytes 已知问题
 
 > 记录实际使用中遇到的阻塞问题、复现方式与修复方向。
-> 最近更新：2026-11-11
+> 最近更新：2026-11-16
 
 ---
 
@@ -275,3 +275,68 @@ dytes self-update --json    # 机器可读结果
   后续需切到 manylinux 构建；
 - 0.2.0 的 Linux 产物仍有该问题，需升级到 0.2.1；
 - 具体报错发行版与缺失符号版本待补充。
+
+---
+
+## I-06 `dytes test` 依赖只复制本地，未实现在线更新下载
+
+**发现日期**：2026-11-16
+**影响版本**：0.2.2
+**影响命令**：`dytes test`
+**严重程度**：P2 —— 测试环境可能使用过期依赖，跨包联调需手工更新
+**状态**：0.2.3 已实现
+
+### 1. 现象
+
+- 当前 `dytes test` 只从 `DYTES_APP_DIR`（默认包目录）与 `dytes.lock` 复制
+  本地已安装的依赖；本地缺少时直接报“未找到已安装的依赖”。
+- 跨包联调（例如 chatllm 依赖 database / kv_lib）时，开发者必须先手工
+  `dytes update`，否则测试用的是旧文件，或直接失败。
+- `test-dependency` 的声明版本只记录、不校验，也不触发任何下载。
+
+### 2. 目标语义（已确认）
+
+1. **当前调试包不下载**：始终使用包目录里的本地构建产物；
+2. **依赖全部更新下载**：清单 `dependencies-core` / `dependencies-sys` /
+   `dependencies-web` / `dependencies-design_plugins` / `dependencies-design_soft` /
+   `dependencies-model` 声明的全部依赖（含传递依赖），加上 `test-dependency`
+   补充声明的包；
+3. **版本**：与 `dytes update` 一致，按声明 semver 下载线上最新版本；
+   精确声明低于线上时装线上版本（锁文件记录声明值），高于线上时报错；
+4. **失败**：下载失败即报错，不回退本地复制，不提供离线回退；
+5. **隔离**：只写入 `.dytes/env/`，不修改真实安装目录。
+
+示例（chatllm）：`chatllm.so` 是当前包产物，不下载；`database.so`、
+`kv_lib.so` 是依赖包，需要下载更新到 `.dytes/env/libary/`。
+
+### 3. 相关代码
+
+| 位置 | 作用 |
+| --- | --- |
+| `src/test.rs::stage_test_dependencies` | 当前从本地复制依赖的实现 |
+| `src/test.rs::stage_one` | 按包类型与锁文件 `loader` 定位本地文件 |
+| `src/update/dytes.rs::plan_dependencies` | 依赖图展开、传递依赖与版本约束（可复用） |
+| `src/update/dytes.rs::install_dependencies_for` | 按拓扑顺序安装依赖（可复用） |
+| `src/update/env.rs::get_app_dir` | 通过 `DYTES_APP_DIR` 切换安装根 |
+
+### 4. 修复方向
+
+1. 把当前包清单写入 `.dytes/env/dytes.json`，并将 `DYTES_APP_DIR` 指向
+   `.dytes/env/`；
+2. 复用 `plan_dependencies` + 逐项 `update_*`，把依赖下载安装到 `.dytes/env/`；
+3. 把 `test-dependency` 合并进依赖计划，作为清单之外仅测试需要的补充；
+4. 当前包仍只从包目录复制导出文件到演练目录，不参与下载；
+5. 下载失败立即中止并返回非 `0`，不再继续安装演练；
+6. 补充集成测试：依赖下载成功、版本不满足、下载失败中止三条路径。
+
+### 5. 备注
+
+- 0.2.3 已实现：`src/test.rs` 改为把 `test-dependency` 合并进清单后，以
+  `.dytes/env/` 为安装根调用更新引擎（新增 `install_dependencies_only`，
+  不执行依赖包的 init 脚本）；依赖下载失败立即中止并返回 `1`，不再进入演练。
+- 原实现的“依赖复制失败仍继续演练”差异已随本地复制逻辑移除。
+- 目标语义已写入 [commands/test.md §4.1](commands/test.md)；
+  [cmd.md §8](cmd.md)、[dytes.md](dytes.md)、
+  [../skills/testenv.md](../skills/testenv.md) 已同步。
+- 集成测试覆盖：合并覆盖规则、下载失败中止、非法类型；下载成功路径需要真实
+  S3 环境，未纳入自动化测试。

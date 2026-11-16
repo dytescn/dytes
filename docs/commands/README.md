@@ -10,7 +10,7 @@
 | `self-update` | [self-update.md](self-update.md) | 升级 dytes 自身 |
 | `publish` | [publish.md](publish.md) | 发布当前包及索引 |
 | `check` | [check.md](check.md) | 校验清单与导出文件 |
-| `test` | [test.md](test.md) | 本地自检、构建 `.dytes` 测试环境并演练安装 |
+| `test` | [test.md](test.md) | 本地自检、在线更新依赖并演练安装 |
 | `init` | [init.md](init.md) | 初始化 `dytes.json` |
 | `config` | [config.md](config.md) | 管理 S3 凭证与平台配置 |
 | `help` | [help.md](help.md) | 帮助与版本输出 |

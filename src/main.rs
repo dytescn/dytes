@@ -14,7 +14,7 @@ use dytes::utils::error::Result;
 #[command(
     name = "dytes",
     version,
-    about = "Piksel 包安装、更新、发布与初始化工具"
+    about = "Design software package management tool"
 )]
 struct Cli {
     #[command(subcommand)]

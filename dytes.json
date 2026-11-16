@@ -1,8 +1,8 @@
 {
   "name": "dytes",
   "uuid": "e73fdb52-ae2f-49d6-9bac-a77e1952b229",
-  "version": "0.2.2",
-  "description": "Piksel package installer, updater and publisher",
+  "version": "0.2.3",
+  "description": "Design software package management tool",
   "keywords": [
     "piksel",
     "package",

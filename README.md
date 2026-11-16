@@ -1,6 +1,6 @@
 # dytes
 
-Piksel 包管理工具：单一 Rust 二进制，负责应用、插件与依赖的安装、更新、发布和配置。
+Design software package management tool: a single Rust binary that installs, updates, publishes, and configures applications, plugins, and dependencies.
 
 ## 命令
 
@@ -11,7 +11,7 @@ Piksel 包管理工具：单一 Rust 二进制，负责应用、插件与依赖�
 | `dytes self-update` | 检查并升级 dytes 自身 |
 | `dytes publish` | 发布当前包；`--dry-run` 只预览 |
 | `dytes check` | 校验包清单 |
-| `dytes test` | 本地包自检、构建 `.dytes` 测试环境并演练安装 |
+| `dytes test` | 本地包自检、在线更新依赖并演练安装 |
 | `dytes init` | 初始化 `dytes.json` |
 | `dytes config` | 管理 S3 凭证与平台配置 |
 

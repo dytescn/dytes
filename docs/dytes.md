@@ -2,7 +2,7 @@
 
 ## 1. 定位
 
-`dytes` 是 Piksel 的包管理工具，单一二进制提供安装、更新、发布、初始化和配置能力。
+`dytes` is a package management tool for design software: a single binary that installs, updates, publishes, and configures applications, plugins, and dependencies.
 命令与参数见 [cmd.md](cmd.md)。
 
 ## 2. 代码结构
@@ -66,7 +66,8 @@ tests/             集成测试
 - 依赖版本使用 semver，支持 `^` / `~` 与 `?` / `optional:` 可选标记；
 - `design_plugins` / `design_soft` 不写入应用根清单，只记录在 `dytes.lock`；
 - `test-dependency` 按包类型分组，仅用于 `dytes test`；它不会参与普通
-  `update`，测试时只把本地已安装的对应依赖复制到 `.dytes/env/`。
+  `update`，测试时与清单 `dependencies-*` 合并后在线更新下载到 `.dytes/env/`
+  （当前包自身不下载，见 [commands/test.md §4.1](commands/test.md#41-依赖下载规则)）。
 
 ### 3.3 锁文件 `dytes.lock`
 
@@ -90,9 +91,9 @@ tests/             集成测试
 - **update**：支持全量、按类型、离线、检查、启动更新；单项失败不阻断其它项。
 - **publish**：先上传全部产物，再更新 `packages.json`；`--dry-run` 不联网。
 - **check**：离线校验清单与导出文件，设计插件执行完整规则。
-- **test**：复用 check 规则；自动创建 `.dytes/` 并写入 `.gitignore`，把
-  `test-dependency` 声明的本地依赖复制到 `.dytes/env/`，再在 `.dytes/` 内
-  演练安装并生成锁文件。
+- **test**：复用 check 规则；自动创建 `.dytes/` 并写入 `.gitignore`，当前包
+  使用本地构建产物，依赖（清单 `dependencies-*` 加 `test-dependency` 补充）
+  在线更新下载到 `.dytes/env/`，再在 `.dytes/` 内演练安装并生成锁文件。
 - **self-update**：读取 `core/dytes` 清单，下载并用 `.sha256` 校验后替换自身。
 
 ## 6. 平台
@@ -111,7 +112,7 @@ tests/             集成测试
 | 安全 | 凭证只从配置 / 环境读取；日志脱敏；路径拒绝 `..` |
 | 跨平台 | Windows / Linux / macOS，路径、扩展名、平台导出一致 |
 | 可测试性 | 业务逻辑与 CLI / GUI 解耦；集成测试见 `tests/` |
-| 测试隔离 | 测试产物只写 `.dytes/`；依赖从本地安装目录复制到 `.dytes/env/` |
+| 测试隔离 | 测试产物只写 `.dytes/`；依赖在线更新下载到 `.dytes/env/`，不修改真实安装目录 |
 
 ## 8. 测试
 

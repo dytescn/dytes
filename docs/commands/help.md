@@ -19,7 +19,7 @@ dytes -V
 总帮助包含全部子命令：
 
 ```text
-Piksel 包安装、更新、发布与初始化工具
+Design software package management tool
 
 Usage: dytes <COMMAND>
 

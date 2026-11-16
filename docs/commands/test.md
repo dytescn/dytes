@@ -2,15 +2,17 @@
 
 ## 1. 职责
 
-统一管理包的本地测试环境，并在发布前完成自检与安装演练：
+统一管理包的本地测试环境，并在发布前完成自检、依赖更新与安装演练：
 
 1. 在包目录创建 `.dytes/`，自动确保它被 `.gitignore` 忽略；
 2. 复用 `dytes check` 的规则校验清单、平台导出与设计插件；
-3. 把 `test-dependency` 声明的、本地已安装的依赖复制到 `.dytes/env/`；
+3. 当前包自身不下载，使用本地构建产物；把清单 `dependencies-*` 的全部依赖
+   （含传递依赖）与 `test-dependency` 补充声明合并后，在线更新下载到
+   `.dytes/env/`；
 4. 在 `.dytes/` 内按安装布局演练当前包落盘与 `dytes.lock` 生成。
 
-`test` 不访问网络、不执行 `setup.json`、不修改真实安装目录，适合本地开发与
-CI 的发布前门禁。
+`test` 需要访问 S3 下载依赖；不执行 `setup.json` / init 脚本，也不修改
+真实安装目录，适合本地开发与 CI 的发布前门禁。
 
 ## 2. 用法
 
@@ -25,7 +27,7 @@ dytes test [<dir>] [--type <type>] [--platform <platform>]
 | `--type <type>` | 只接受指定类型；不一致返回 `3` | 已实现 |
 | `--platform <platform>` | 选择 `platform-exports`，默认当前平台 | 已实现 |
 | `--manifest-only` | 允许没有 exports 的仅清单包 | 已实现 |
-| `--work-dir <path>` | 演练目录，相对 `.dytes/`；必须不存在 | 已实现 |
+| `--work-dir <path>` | 演练目录，必须位于 `.dytes/` 内（相对路径）且不存在 | 已实现 |
 | `--keep` | 保留演练目录，便于排查 | 已实现 |
 | `--json` | JSON 输出 | 已实现 |
 
@@ -36,6 +38,8 @@ dytes test [<dir>] [--type <type>] [--platform <platform>]
 ```text
 .dytes/
 ├── env/                         # 测试依赖环境（每次 test 重建）
+│   ├── dytes.json               # 合并后的测试依赖清单
+│   ├── dytes.lock               # 依赖安装记录
 │   ├── libary/                  # sys / core 依赖
 │   ├── web/<name>/              # web 依赖
 │   ├── plugins/<name>/          # design_plugins 依赖
@@ -49,7 +53,8 @@ dytes test [<dir>] [--type <type>] [--platform <platform>]
 - 首次执行时自动创建或追加 `.gitignore`，写入 `.dytes/`，避免误提交；
 - `.dytes/env/` 每次执行前清空重建，防止旧依赖残留；
 - 演练目录默认在结束后删除，`--keep` 保留；
-- `--work-dir` 只能是 `.dytes/` 内的相对路径，不能包含 `..`。
+- `--work-dir` 必须位于 `.dytes/` 内（相对路径；也接受确实位于 `.dytes/`
+  内的绝对路径），不能包含 `..`。
 
 ## 4. `test-dependency`
 
@@ -74,10 +79,32 @@ dytes test [<dir>] [--type <type>] [--platform <platform>]
 - 键为包类型：`core` / `sys` / `web` / `design_plugins` / `design_soft` / `model`；
 - 值为 `包名 → 声明版本`；
 - 未知类型会让清单校验失败（退出码 `3`）；
-- `test` 不会下载依赖，只复制本地已安装的文件。
+- `test` 会把 `test-dependency` 合并进清单的 `dependencies-*` 后在线下载；
+  同名条目以 `test-dependency` 为准。
 
-依赖来源目录默认为当前包目录；如果测试包不是应用根目录，可用
-`DYTES_APP_DIR` 指向真实应用目录。
+### 4.1 依赖下载规则
+
+1. **当前包自身不下载**：`dytes test` 正在调试的包始终使用包目录里的本地构建
+   产物，`platform-exports` / `exports` 指向的文件不会被远端版本替换。
+2. **依赖全部更新下载**：下载范围是当前包依赖的并集——
+   - 清单 `dependencies-core` / `dependencies-sys` / `dependencies-web` /
+     `dependencies-design_plugins` / `dependencies-design_soft` /
+     `dependencies-model` 声明的全部依赖（含传递依赖）；
+   - `test-dependency` 补充声明的、清单之外仅测试需要的依赖。
+3. **版本**：按声明 semver 解析，安装线上最新版本，与 `dytes update` 保持一致：
+   - 范围声明（`^` / `~`）要求线上版本满足约束；
+   - 精确声明低于线上版本时按线上版本安装，锁文件记录声明值；
+   - 精确声明高于线上版本时直接报错。
+4. **失败**：任一依赖下载或安装失败即中止，不静默回退到本地复制，也不进入
+   安装演练；失败返回退出码 `1`。
+5. **隔离**：下载结果只写入 `.dytes/env/`，不修改真实安装目录；不执行依赖包
+   的 init 脚本。
+
+示例（chatllm）：
+
+- `chatllm.so` 是当前调试包的产物——**不下载**，直接使用本地构建文件；
+- `database.so`、`kv_lib.so` 是 chatllm 依赖的包——**需要下载更新**到
+  `.dytes/env/libary/`。
 
 ## 5. 执行流程
 
@@ -98,23 +125,26 @@ dytes test [<dir>] [--type <type>] [--platform <platform>]
 - 当前平台导出存在且源文件存在；
 - 设计插件执行完整规则。
 
-任何一项失败都不会继续复制依赖或演练。
+任何一项失败都不会继续依赖下载或演练。
 
-### 5.3 复制测试依赖
+### 5.3 安装测试依赖
 
-1. 读取 `test-dependency`；
-2. 从 `DYTES_APP_DIR`（默认包目录）读取 `dytes.lock`；
-3. 按类型复制到 `.dytes/env/`：
-   - `sys`：复制 `libary/<name>/`，并按锁文件 `loader` 复制导出文件；
-   - `core`：按锁文件 `loader` 复制，缺失时回退到 `<name>` / `libary/<name>`；
-   - `web` / `design_plugins` / `design_soft` / `model`：复制对应包目录；
-4. 任一声明依赖找不到时报失败，测试环境不完整。
+1. 读取清单 `dependencies-*` 与 `test-dependency`，同名条目以
+   `test-dependency` 为准；
+2. 把合并后的清单写入 `.dytes/env/dytes.json`；
+3. 以 `.dytes/env/` 为安装根（临时设置 `DYTES_APP_DIR` 并切换工作目录），
+   调用更新引擎：
+   - 展开传递依赖并做拓扑排序；
+   - 按声明 semver 下载线上最新版本；
+   - 不执行依赖包的 init 脚本；
+4. 依赖下载或版本约束失败时立即中止，不进入安装演练，返回退出码 `1`；
+5. 安装记录写入 `.dytes/env/dytes.lock`。
 
 ### 5.4 安装演练
 
 1. 在 `.dytes/` 内创建演练目录；
 2. 按安装布局写入 `dytes.json`；
-3. 对每个导出：
+3. 未指定 `--manifest-only` 时对每个导出：
    - 拒绝绝对路径、盘符与 `..`；
    - 检查目标名不重复、源文件存在；
    - 清单含 `checksums` 时校验 SHA-256 / 大小 / 采样模式；
@@ -144,7 +174,9 @@ PASS exports 非空  1 个
 PASS exports 文件存在: ./bin/demo.exe  D:\pkg\bin\demo.exe
 PASS 测试目录已就绪  D:\pkg\.dytes
 PASS .gitignore 已追加 .dytes/  D:\pkg\.gitignore
-PASS 测试依赖 sys/info_lib  D:\pkg\.dytes\env
+PASS 测试依赖清单已就绪  D:\pkg\.dytes\env\dytes.json
+PASS 测试依赖 sys/database  1.2.0
+PASS 测试依赖 sys/kv_lib  0.8.1
 PASS 演练目录已创建  D:\pkg\.dytes\run-1234\dytes-test-...
 PASS 清单已写入演练目录  ...\dytes.json
 PASS 导出文件可落盘: demo.exe  ...\demo.exe
@@ -173,10 +205,10 @@ PASS 锁文件可序列化  ...\dytes.lock
   "dependencies": [
     {
       "type": "sys",
-      "name": "info_lib",
-      "source": "D:\\pkg",
-      "target": "D:\\pkg\\.dytes\\env",
-      "files": ["libary/info_lib.dll"]
+      "name": "database",
+      "version": "1.2.0",
+      "declared": "0.1.0",
+      "target": "D:\\pkg\\.dytes\\env"
     }
   ],
   "checks": [
@@ -195,31 +227,36 @@ PASS 锁文件可序列化  ...\dytes.lock
 
 未使用 `--keep` 时，`work_dir` 在命令结束后已被删除；`.dytes/env` 会保留。
 
+声明了依赖时，更新引擎的下载进度会先输出到 stdout，JSON 对象在最后一行；
+机器解析请取 `stdout` 的最后一行。
+
 ## 8. 退出码
 
 | 退出码 | 场景 |
 | --- | --- |
-| `0` | 自检、依赖复制与演练全部通过 |
-| `1` | 创建 `.dytes` / `.gitignore` / 演练目录或复制文件等 IO 失败 |
-| `2` | 参数错误；`--work-dir` 越界或已存在；未知类型 |
-| `3` | 清单、`test-dependency`、导出、init、checksum、路径安全或锁文件校验失败 |
+| `0` | 自检、依赖下载与演练全部通过 |
+| `1` | 依赖下载 / 安装失败；创建 `.dytes`、`.gitignore`、演练目录或复制文件等 IO 失败 |
+| `2` | 参数错误；`--work-dir` 越界或已存在；`--type` 值未知 |
+| `3` | 清单、`test-dependency` 声明、导出、init、checksum、路径安全或锁文件校验失败 |
 
 ## 9. 边界与约束
 
-- 全程离线，不读取 S3，不调用 FFI，不修改真实安装目录；
-- 只复制依赖文件，不执行 `setup.json`，不启动应用；
+- 需要访问 S3 下载依赖；不调用 FFI，不执行 `setup.json` / init 脚本，不修改
+  真实安装目录；
+- 只下载依赖文件，不启动应用；
 - `.dytes/` 是生成目录，可随时删除；`test` 会自动重建；
 - 自动维护 `.gitignore`，但不会执行 `git add` 或提交；
-- 路径安全：导出目标、源路径、init 路径、依赖路径都拒绝绝对路径、盘符、`..`；
+- 路径安全：导出目标、源路径、init 路径都拒绝绝对路径、盘符、`..`；
 - 包名必须是不含路径分隔符的单段名称；
-- `test-dependency` 的版本是声明值，复制时不重新下载或校验远端版本。
+- `test-dependency` 的版本按 semver 参与解析，实际安装线上最新版本；
+  不提供离线回退或本地复制降级。
 
 ## 10. 测试点
 
 - 正常包通过，演练目录生成 `dytes.json`、导出文件与 `dytes.lock`；
 - 自动创建 `.dytes/`、`.dytes/env/` 与 `.gitignore` 规则，重复执行不重复追加；
-- `test-dependency` 的 sys / web 依赖复制到 `.dytes/env/`；
-- 声明的依赖未安装时返回 `3`；
+- `test-dependency` 合并进 `dependencies-*`，同名条目以测试声明为准；
+- 依赖下载失败返回 `1`，且不创建演练目录；
 - 非法 `test-dependency` 类型返回 `3`；
 - 导出源文件缺失、目标为 `../evil.exe` 时返回 `3`；
 - `init` 脚本缺失返回 `3`；
@@ -233,8 +270,7 @@ PASS 锁文件可序列化  ...\dytes.lock
 ## 11. 后续规划
 
 1. 增加 `--run-init`：在 `.dytes/env` 中执行 `setup.json`（需要宿主环境，默认关闭）；
-2. 为 `test-dependency` 增加版本匹配检查与缺失时的在线安装选项；
-3. 输出失败项的可修复建议；
-4. 与 CI 集成：`dytes test --json` 作为发布前门禁；
-5. 为设计插件增加 DLL 依赖与 MCP 运行时检查；
-6. 支持 `.dytes/env` 缓存与增量复制，减少大依赖的重复复制。
+2. 输出失败项的可修复建议；
+3. 与 CI 集成：`dytes test --json` 作为发布前门禁；
+4. 为设计插件增加 DLL 依赖与 MCP 运行时检查；
+5. 支持 `.dytes/env` 缓存与增量复制，减少大依赖的重复下载。

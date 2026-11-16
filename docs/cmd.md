@@ -191,7 +191,9 @@ dytes test [<dir>] [--type <type>] [--platform <platform>]
 
 1. 自动创建 `<包目录>/.dytes/`，并把 `.dytes/` 写入包根 `.gitignore`；
 2. 复用 `dytes check` 的规则校验清单与导出；
-3. 把 `test-dependency` 声明的本地已安装依赖复制到 `.dytes/env/`；
+3. 当前包自身不下载，使用本地构建产物；清单 `dependencies-*` 的全部依赖
+   （含传递依赖）与 `test-dependency` 补充声明合并后，在线更新下载到
+   `.dytes/env/`；
 4. 在 `.dytes/` 内按平台安装布局复制导出文件与 init 脚本，写入并回读
    `dytes.lock`。
 
@@ -205,10 +207,11 @@ dytes test [<dir>] [--type <type>] [--platform <platform>]
 ```
 
 - 默认演练目录：`.dytes/run-<pid>/dytes-test-<时间戳>`；
-- `--work-dir` 只能是 `.dytes/` 内的相对路径；默认清理，`--keep` 保留；
-- `.dytes/env/` 每次执行前重建，依赖从本地安装目录复制，不访问网络；
+- `--work-dir` 必须位于 `.dytes/` 内（相对路径）；默认清理，`--keep` 保留；
+- `.dytes/env/` 每次执行前重建；当前包自身不下载，依赖按声明 semver 从 S3
+  下载线上最新版本；
 - 拒绝绝对路径、盘符与 `..`；清单含 `checksums` 时校验摘要；
-- 自检、依赖复制或演练失败返回 `3`。
+- 自检、依赖下载或演练失败返回非 `0`；依赖下载 / 安装失败返回 `1`。
 
 详细规划见 [commands/test.md](commands/test.md)。
 

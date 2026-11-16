@@ -78,6 +78,12 @@ struct Rehearsal {
 
 pub fn run(args: TestArgs) -> Result<()> {
     let dir = args.dir.unwrap_or(std::env::current_dir()?);
+    // 依赖安装期间会临时切换工作目录，先转成绝对路径避免后续相对路径失效。
+    let dir = if dir.is_absolute() {
+        dir
+    } else {
+        std::env::current_dir()?.join(dir)
+    };
     let setup = setup_test_root(&dir)?;
     let platform = args.platform.unwrap_or_else(platform::current_platform);
     let outcome = evaluate_check(
@@ -100,18 +106,27 @@ pub fn run(args: TestArgs) -> Result<()> {
 
     let mut rehearsal = None;
     let mut dependencies = Vec::new();
+    let mut failure_code = None;
 
     if report.passed() {
-        dependencies = stage_test_dependencies(&dir, &outcome.config, &setup.env_dir, &mut report)?;
-        rehearsal = Some(rehearse(
-            &dir,
-            &outcome,
-            args.manifest_only,
-            args.keep,
-            args.work_dir,
-            &setup,
-            &mut report,
-        )?);
+        match install_test_dependencies(&outcome.config, &setup.env_dir, &mut report) {
+            Ok(installed) => {
+                dependencies = installed;
+                rehearsal = Some(rehearse(
+                    &dir,
+                    &outcome,
+                    args.manifest_only,
+                    args.keep,
+                    args.work_dir,
+                    &setup,
+                    &mut report,
+                )?);
+            }
+            Err(error) => {
+                report.fail("依赖安装", error.message.clone());
+                failure_code = Some(error.code);
+            }
+        }
     }
 
     if args.json {
@@ -156,10 +171,10 @@ pub fn run(args: TestArgs) -> Result<()> {
     if report.passed() {
         Ok(())
     } else {
-        Err(DytesError::config(format!(
-            "包自检失败: {} 项",
-            report.failure_count()
-        )))
+        Err(DytesError::new(
+            failure_code.unwrap_or(3),
+            format!("包自检失败: {} 项", report.failure_count()),
+        ))
     }
 }
 
@@ -217,212 +232,144 @@ fn is_dytes_ignore_line(line: &str) -> bool {
     matches!(line.trim(), ".dytes/" | ".dytes" | "/.dytes/" | "/.dytes")
 }
 
-/// 把 `test-dependency` 声明的本地已安装依赖复制到 `.dytes/env/`。
-fn stage_test_dependencies(
-    package_dir: &Path,
+/// 把 `test-dependency` 合并进清单的 `dependencies-*`。
+///
+/// 清单声明是基础，`test-dependency` 作为测试专用补充；同名条目以
+/// `test-dependency` 为准。
+pub fn merge_test_dependencies(config: &DytesConfig) -> Result<DytesConfig> {
+    let mut merged = config.clone();
+    for (type_name, deps) in &config.test_dependency {
+        let dep_type = DependencyType::from_name(type_name).ok_or_else(|| {
+            DytesError::config(format!("test-dependency 包含未知包类型: {type_name}"))
+        })?;
+        let target = match dep_type {
+            DependencyType::Core => &mut merged.dependencies_core,
+            DependencyType::Sys => &mut merged.dependencies_sys,
+            DependencyType::Web => &mut merged.dependencies_web,
+            DependencyType::DesignPlugins => &mut merged.dependencies_design_plugins,
+            DependencyType::DesignSoft => &mut merged.dependencies_design_soft,
+            DependencyType::Model => &mut merged.dependencies_model,
+        };
+        for (name, version) in deps {
+            target.insert(name.clone(), version.clone());
+        }
+    }
+    Ok(merged)
+}
+
+fn has_dependencies(config: &DytesConfig) -> bool {
+    !config.dependencies_core.is_empty()
+        || !config.dependencies_sys.is_empty()
+        || !config.dependencies_web.is_empty()
+        || !config.dependencies_design_plugins.is_empty()
+        || !config.dependencies_design_soft.is_empty()
+        || !config.dependencies_model.is_empty()
+}
+
+/// 在线更新下载当前包的依赖到 `.dytes/env/`。
+///
+/// 当前包自身不下载；`test-dependency` 合并进清单后，与 `dependencies-*`
+/// 一起交给更新引擎按声明 semver 安装线上最新版本。
+fn install_test_dependencies(
     config: &DytesConfig,
     env_dir: &Path,
     report: &mut CheckReport,
 ) -> Result<Vec<serde_json::Value>> {
-    if config.test_dependency.is_empty() {
+    let merged = merge_test_dependencies(config)?;
+    if !has_dependencies(&merged) {
         return Ok(Vec::new());
     }
 
-    let source_root = dependency_source_root(package_dir);
-    let lock = read_lock_file(&source_root);
-    let mut groups: Vec<(&String, &std::collections::HashMap<String, String>)> =
-        config.test_dependency.iter().collect();
-    groups.sort_by(|a, b| a.0.cmp(b.0));
+    // `.dytes/env/` 作为测试安装根；清单供更新引擎读取与排查。
+    let manifest = serde_json::to_string_pretty(&merged)
+        .map_err(|e| DytesError::failed(format!("序列化测试依赖清单失败: {e}")))?;
+    let manifest_path = env_dir.join("dytes.json");
+    fs::write(&manifest_path, manifest)
+        .map_err(|e| DytesError::failed(format!("写入 {} 失败: {e}", manifest_path.display())))?;
+    report.pass("测试依赖清单已就绪", manifest_path.display().to_string());
 
-    let mut staged = Vec::new();
-    for (pkg_type, deps) in groups {
-        let Some(dep_type) = DependencyType::from_name(pkg_type) else {
-            report.fail(
-                format!("测试依赖类型 {pkg_type}"),
-                "未知包类型（应为 core / sys / web / design_plugins / design_soft / model）",
-            );
-            continue;
-        };
+    run_dependency_install(env_dir, &merged)?;
 
-        let mut names: Vec<&String> = deps.keys().collect();
-        names.sort();
-        for name in names {
-            let label = format!("测试依赖 {}/{}", dep_type.as_str(), name);
-            match stage_one(dep_type, name, &source_root, env_dir, lock.as_ref()) {
-                Ok(item) => {
-                    let target = item["target"].as_str().unwrap_or("").to_string();
-                    report.pass(label, target);
-                    staged.push(item);
-                }
-                Err(error) => report.fail(label, error),
-            }
-        }
+    let installed = read_installed_dependencies(env_dir);
+    if installed.is_empty() {
+        report.fail("测试依赖安装", "更新引擎未写入 dytes.lock");
+        return Err(DytesError::failed("测试依赖安装未产生锁文件记录"));
     }
-    Ok(staged)
-}
-
-fn stage_one(
-    dep_type: DependencyType,
-    name: &str,
-    source_root: &Path,
-    env_dir: &Path,
-    lock: Option<&DytesLock>,
-) -> std::result::Result<serde_json::Value, String> {
-    let mut copied = Vec::new();
-
-    match dep_type {
-        DependencyType::Core => {
-            if let Some(package) = lock_package(lock, name) {
-                for entry in &package.loader {
-                    let Some(dest) = entry.get(1) else {
-                        continue;
-                    };
-                    copy_relative(source_root, env_dir, Path::new(dest), &mut copied)?;
-                }
-            }
-            if copied.is_empty() {
-                let candidates = [
-                    source_root.join(name),
-                    source_root.join("libary").join(name),
-                ];
-                for source in candidates {
-                    if source.exists() {
-                        let relative = source
-                            .strip_prefix(source_root)
-                            .map_err(|e| format!("解析依赖路径失败: {e}"))?;
-                        copy_entry(&source, &env_dir.join(relative))?;
-                        copied.push(relative.display().to_string());
-                    }
-                }
-            }
-        }
-        DependencyType::Sys => {
-            let package_dir = source_root.join("libary").join(name);
-            if package_dir.exists() {
-                let relative = Path::new("libary").join(name);
-                copy_entry(&package_dir, &env_dir.join(&relative))?;
-                copied.push(relative.display().to_string());
-            }
-            if let Some(package) = lock_package(lock, name) {
-                for entry in &package.loader {
-                    let Some(dest) = entry.get(1) else {
-                        continue;
-                    };
-                    let relative = sys_relative(dest);
-                    copy_relative(source_root, env_dir, &relative, &mut copied)?;
-                }
-            }
-        }
-        other => {
-            let relative = dependency_relative(other, name);
-            copy_relative(source_root, env_dir, &relative, &mut copied)?;
-        }
-    }
-
-    if copied.is_empty() {
-        return Err(format!(
-            "未找到已安装的依赖 {name}（来源目录: {}）",
-            source_root.display()
-        ));
-    }
-
-    Ok(json!({
-        "type": dep_type.as_str(),
-        "name": name,
-        "source": source_root,
-        "target": env_dir,
-        "files": copied,
-    }))
-}
-
-/// `core` / `sys` / `web` / `design_plugins` / `design_soft` / `model` 的本地目录。
-fn dependency_relative(dep_type: DependencyType, name: &str) -> PathBuf {
-    match dep_type {
-        DependencyType::Core => PathBuf::new(),
-        DependencyType::Sys => Path::new("libary").join(name),
-        DependencyType::Web => Path::new("web").join(name),
-        DependencyType::DesignPlugins => Path::new("plugins").join(name),
-        DependencyType::DesignSoft => Path::new("apps").join(name),
-        DependencyType::Model => Path::new("models").join(name),
-    }
-}
-
-/// `sys` 的锁文件目标通常相对 `libary/`，也可能已经带 `libary/` 前缀。
-fn sys_relative(dest: &str) -> PathBuf {
-    let path = Path::new(dest);
-    if path.starts_with("libary") {
-        path.to_path_buf()
-    } else {
-        Path::new("libary").join(path)
-    }
-}
-
-fn dependency_source_root(package_dir: &Path) -> PathBuf {
-    if let Ok(dir) = std::env::var("DYTES_APP_DIR") {
-        let dir = dir.trim();
-        if !dir.is_empty() {
-            return PathBuf::from(dir);
-        }
-    }
-    package_dir.to_path_buf()
-}
-
-fn read_lock_file(root: &Path) -> Option<DytesLock> {
-    let text = fs::read_to_string(root.join("dytes.lock")).ok()?;
-    serde_json::from_str(&text).ok()
-}
-
-fn lock_package<'a>(lock: Option<&'a DytesLock>, name: &str) -> Option<&'a PackageLock> {
-    lock?.package.iter().find(|package| package.name == name)
-}
-
-fn copy_relative(
-    source_root: &Path,
-    env_dir: &Path,
-    relative: &Path,
-    copied: &mut Vec<String>,
-) -> std::result::Result<(), String> {
-    if !is_safe_relative(relative) || relative.as_os_str().is_empty() {
-        return Err(format!("依赖路径不安全: {}", relative.display()));
-    }
-    let source = source_root.join(relative);
-    if !source.exists() {
-        return Err(format!("依赖文件缺失: {}", source.display()));
-    }
-    copy_entry(&source, &env_dir.join(relative))?;
-    copied.push(relative.display().to_string());
-    Ok(())
-}
-
-fn copy_entry(source: &Path, target: &Path) -> std::result::Result<(), String> {
-    if source.is_dir() {
-        fs::create_dir_all(target)
-            .map_err(|e| format!("创建目录 {} 失败: {e}", target.display()))?;
-        let entries =
-            fs::read_dir(source).map_err(|e| format!("读取目录 {} 失败: {e}", source.display()))?;
-        for entry in entries {
-            let entry = entry.map_err(|e| format!("读取目录项失败: {e}"))?;
-            if entry.file_name() == ".dytes" {
-                continue;
-            }
-            copy_entry(&entry.path(), &target.join(entry.file_name()))?;
-        }
-    } else if source.is_file() {
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("创建目录 {} 失败: {e}", parent.display()))?;
-        }
-        fs::copy(source, target).map_err(|e| {
+    for dep in &installed {
+        report.pass(
             format!(
-                "复制 {} -> {} 失败: {e}",
-                source.display(),
-                target.display()
-            )
-        })?;
-    } else {
-        return Err(format!("依赖路径不存在: {}", source.display()));
+                "测试依赖 {}/{}",
+                dep["type"].as_str().unwrap_or(""),
+                dep["name"].as_str().unwrap_or("")
+            ),
+            dep["version"].as_str().unwrap_or("").to_string(),
+        );
     }
-    Ok(())
+    Ok(installed)
+}
+
+/// 以 `.dytes/env/` 为安装根运行更新引擎。
+///
+/// 更新引擎的锁文件使用相对路径，因此临时切换工作目录并设置
+/// `DYTES_APP_DIR`，结束后无论如何都恢复进程状态。
+fn run_dependency_install(env_dir: &Path, config: &DytesConfig) -> Result<()> {
+    let env_dir = env_dir.canonicalize().map_err(|e| {
+        DytesError::failed(format!("解析测试环境目录失败: {}: {e}", env_dir.display()))
+    })?;
+    let previous_dir = std::env::current_dir()
+        .map_err(|e| DytesError::failed(format!("读取当前目录失败: {e}")))?;
+    let previous_app_dir = std::env::var_os("DYTES_APP_DIR");
+
+    std::env::set_current_dir(&env_dir)
+        .map_err(|e| DytesError::failed(format!("切换测试环境目录失败: {e}")))?;
+    std::env::set_var("DYTES_APP_DIR", &env_dir);
+
+    let config = config.clone();
+    let joined = std::thread::Builder::new()
+        .name("dytes-test-deps".to_string())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(move || -> std::result::Result<(), String> {
+            let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+            runtime
+                .block_on(crate::update::dytes::install_dependencies_only(&config))
+                .map_err(|e| format!("{e:#}"))
+        })
+        .map_err(|e| DytesError::failed(format!("创建依赖安装线程失败: {e}")))?
+        .join();
+
+    // 无论成功失败都恢复进程状态，避免影响后续演练。
+    let _ = std::env::set_current_dir(&previous_dir);
+    match previous_app_dir {
+        Some(value) => std::env::set_var("DYTES_APP_DIR", value),
+        None => std::env::remove_var("DYTES_APP_DIR"),
+    }
+
+    match joined {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(DytesError::failed(format!("依赖下载失败: {error}"))),
+        Err(_) => Err(DytesError::failed("依赖安装线程异常退出")),
+    }
+}
+
+fn read_installed_dependencies(env_dir: &Path) -> Vec<serde_json::Value> {
+    let Ok(text) = fs::read_to_string(env_dir.join("dytes.lock")) else {
+        return Vec::new();
+    };
+    let Ok(lock) = serde_json::from_str::<DytesLock>(&text) else {
+        return Vec::new();
+    };
+    lock.package
+        .into_iter()
+        .map(|package| {
+            json!({
+                "type": package.pkg_type,
+                "name": package.name,
+                "version": package.version,
+                "declared": package.declared,
+                "target": env_dir,
+            })
+        })
+        .collect()
 }
 
 /// 在 `.dytes/` 中模拟安装：复制导出文件、init 脚本并写入锁文件。

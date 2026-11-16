@@ -3,6 +3,7 @@
 mod common;
 
 use common::{assert_code, stderr, stdout, TestEnv};
+use dytes::utils::dytes::DytesConfig;
 use serde_json::json;
 
 fn app_manifest() -> serde_json::Value {
@@ -296,55 +297,35 @@ fn test_gitignore_is_appended_once() {
 }
 
 #[test]
-fn test_dependency_is_copied_into_dytes_env() {
-    let env = TestEnv::new();
-    env.write_json(
-        "dytes.json",
-        &json!({
-            "name": "demo",
-            "version": "0.1.0",
-            "type": "app",
-            "exports": { "./bin/demo.exe": "demo.exe" },
-            "test-dependency": {
-                "sys": { "info_lib": "0.1.0" },
-                "web": { "setting": "0.2.0" }
+fn merge_test_dependencies_adds_and_overrides() {
+    let config: DytesConfig = serde_json::from_value(json!({
+        "name": "demo",
+        "version": "0.1.0",
+        "type": "app",
+        "exports": { "./bin/demo.exe": "demo.exe" },
+        "dependencies-sys": {
+            "database": "0.1.0",
+            "kv_lib": "0.1.0"
+        },
+        "test-dependency": {
+            "sys": {
+                "database": "0.2.0",
+                "probe_lib": "1.0.0"
             }
-        }),
-    );
-    env.write("bin/demo.exe", "binary");
-    env.write("libary/info_lib.dll", "dll");
-    env.write("libary/info_lib/dytes.json", "{\"name\":\"info_lib\"}");
-    env.write("web/setting/index.html", "<html></html>");
-    env.write_json(
-        "dytes.lock",
-        &json!({
-            "package": [{
-                "name": "info_lib",
-                "version": "0.1.0",
-                "type": "sys",
-                "loader": [["src", "libary/info_lib.dll"]]
-            }]
-        }),
-    );
+        }
+    }))
+    .unwrap();
 
-    let out = env.run(&["test", "--work-dir", "rehearsal", "--keep"]);
-    assert_code(&out, 0);
-    assert!(env.root().join(".dytes/env/libary/info_lib.dll").is_file());
-    assert!(env
-        .root()
-        .join(".dytes/env/libary/info_lib/dytes.json")
-        .is_file());
-    assert!(env
-        .root()
-        .join(".dytes/env/web/setting/index.html")
-        .is_file());
-
-    // 原有安装目录不被修改。
-    assert!(env.root().join("libary/info_lib.dll").is_file());
+    let merged = dytes::test::merge_test_dependencies(&config).unwrap();
+    assert_eq!(merged.dependencies_sys.get("database").unwrap(), "0.2.0");
+    assert_eq!(merged.dependencies_sys.get("kv_lib").unwrap(), "0.1.0");
+    assert_eq!(merged.dependencies_sys.get("probe_lib").unwrap(), "1.0.0");
+    // 原清单不被修改。
+    assert_eq!(config.dependencies_sys.get("database").unwrap(), "0.1.0");
 }
 
 #[test]
-fn test_missing_test_dependency_fails() {
+fn test_dependency_download_failure_fails_before_rehearsal() {
     let env = TestEnv::new();
     env.write_json(
         "dytes.json",
@@ -358,9 +339,17 @@ fn test_missing_test_dependency_fails() {
     );
     env.write("bin/demo.exe", "binary");
 
-    let out = env.run(&["test"]);
-    assert_code(&out, 3);
-    assert!(stdout(&out).contains("未找到已安装的依赖"));
+    // 指向不可达的 S3 endpoint，强制依赖下载失败。
+    let out = env
+        .command()
+        .env("DYTES_S3_ENDPOINT", "http://127.0.0.1:1")
+        .args(["test", "--work-dir", "rehearsal"])
+        .output()
+        .expect("启动 dytes 失败");
+    assert_code(&out, 1);
+    assert!(stdout(&out).contains("依赖下载失败"));
+    // 失败后不进入安装演练。
+    assert!(!env.root().join(".dytes/rehearsal").exists());
 }
 
 #[test]

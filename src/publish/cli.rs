@@ -275,7 +275,14 @@ pub fn run_check(args: CheckArgs) -> Result<()> {
         let checks: Vec<serde_json::Value> = report
             .items
             .iter()
-            .map(|item| json!({ "label": item.label, "ok": item.ok, "detail": item.detail }))
+            .map(|item| {
+                json!({
+                    "label": item.label,
+                    "ok": item.ok,
+                    "detail": item.detail,
+                    "severity": item.severity(),
+                })
+            })
             .collect();
         println!("{}", json!({ "passed": report.passed(), "checks": checks }));
     } else {

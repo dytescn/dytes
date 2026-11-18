@@ -268,8 +268,9 @@ fn mcp_root(package: &Path) -> Option<std::path::PathBuf> {
 
 /// 校验插件内所有 MCP 工具声明的库已安装且 uuid 一致。
 ///
-/// 只校验同时提供 `transport.library` 与 `transport.library_uuid` 的工具；
-/// 普通本地插件（没有 MCP transport）跳过。
+/// 同时处理字符串引用与内联对象；只校验同时提供 `transport.library`
+/// 与 `transport.library_uuid` 的工具。读取或解析失败会给出警告而不是
+/// 静默跳过，便于定位坏文件；无 MCP transport 的普通本地插件仍然跳过。
 fn verify_mcp_libraries(package_dir: &str, app_dir: &str) -> Result<()> {
     let package = Path::new(package_dir);
     let Some(root) = mcp_root(package) else {
@@ -285,33 +286,67 @@ fn verify_mcp_libraries(package_dir: &str, app_dir: &str) -> Result<()> {
     };
 
     let mut checked = HashSet::new();
-    for tool in tools {
-        let Some(file_name) = tool.as_str() else {
-            continue;
-        };
-        if file_name.contains('/') || file_name.contains('\\') {
-            continue;
-        }
-        let Ok(tool_text) = fs::read_to_string(root.join(file_name)) else {
-            continue;
-        };
-        let Ok(tool_value) = serde_json::from_str::<Value>(&tool_text) else {
-            continue;
+    for (index, tool) in tools.iter().enumerate() {
+        let (tool_value, label) = match tool {
+            Value::String(file_name) => {
+                if file_name.contains('/') || file_name.contains('\\') {
+                    continue;
+                }
+                let path = root.join(file_name);
+                let text = match fs::read_to_string(&path) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        eprintln!("  警告: 跳过 MCP 工具 {file_name}：读取失败 {error}");
+                        continue;
+                    }
+                };
+                match serde_json::from_str::<Value>(&text) {
+                    Ok(value) => (value, file_name.clone()),
+                    Err(error) => {
+                        eprintln!("  警告: 跳过 MCP 工具 {file_name}：解析失败 {error}");
+                        continue;
+                    }
+                }
+            }
+            Value::Object(object) => {
+                let name = object
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty());
+                let label = name
+                    .map(|name| format!("内联工具 {name}（tools[{index}]）"))
+                    .unwrap_or_else(|| format!("内联工具 tools[{index}]"));
+                (tool.clone(), label)
+            }
+            _ => continue,
         };
         let Some(transport) = tool_value.get("transport") else {
             continue;
         };
-        let Some(library) = transport.get("library").and_then(Value::as_str) else {
+        let Some(library) = transport
+            .get("library")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|library| !library.is_empty())
+        else {
+            eprintln!("  警告: MCP 工具 {label} 的 transport.library 缺失，已跳过校验");
             continue;
         };
-        let Some(uuid) = transport.get("library_uuid").and_then(Value::as_str) else {
+        let Some(uuid) = transport
+            .get("library_uuid")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|uuid| !uuid.is_empty())
+        else {
+            eprintln!("  警告: MCP 工具 {label} 的 transport.library_uuid 缺失，已跳过校验");
             continue;
         };
         if !checked.insert((library.to_string(), uuid.to_string())) {
             continue;
         }
         verify_mcp_library(app_dir, library, uuid)
-            .with_context(|| format!("MCP 工具 {file_name} 关联的库 {library} 校验失败"))?;
+            .with_context(|| format!("MCP 工具 {label} 关联的库 {library} 校验失败"))?;
     }
     Ok(())
 }

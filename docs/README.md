@@ -6,6 +6,8 @@
 | --- | --- |
 | [dytes.md](dytes.md) | 设计、包模型与关键行为 |
 | [cmd.md](cmd.md) | 命令、参数与退出码 |
+| [mcp.md](mcp.md) | 设计插件 MCP 工具的文件布局、字段与校验规范 |
+| [mcp-official.md](mcp-official.md) | 官方 MCP 规范（2026-07-28）摘要与差异、改造建议 |
 | [commands/](commands/README.md) | 每个子命令的详细规划与用法 |
 | [action.md](action.md) | GitHub Action 用法 |
 | [issues.md](issues.md) | 已知问题与排查记录 |

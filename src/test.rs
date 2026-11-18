@@ -133,7 +133,14 @@ pub fn run(args: TestArgs) -> Result<()> {
         let checks: Vec<serde_json::Value> = report
             .items
             .iter()
-            .map(|item| json!({ "label": item.label, "ok": item.ok, "detail": item.detail }))
+            .map(|item| {
+                json!({
+                    "label": item.label,
+                    "ok": item.ok,
+                    "detail": item.detail,
+                    "severity": item.severity(),
+                })
+            })
             .collect();
         let mut value = json!({
             "passed": report.passed(),

@@ -28,13 +28,43 @@ pub const KNOWN_TARGETS: [&str; 5] =
 const MAX_NAME: usize = 120;
 const MAX_DESCRIPTION: usize = 500;
 const MAX_CONTENT: usize = 8000;
+/// 与官方 MCP 对齐：工具名 1–128 字符，仅允许 `A-Z a-z 0-9 _ - .`。
+const MAX_TOOL_NAME: usize = 128;
+/// 官方未限制 `title` 长度；这里是面向 UI 展示的本地建议值。
+const MAX_TOOL_TITLE: usize = 120;
+/// `mcp.json` 顶层允许的字段；其它字段目前会被忽略。
+const MCP_TOP_LEVEL_FIELDS: [&str; 2] = ["tools", "schemaVersion"];
+/// 官方默认方言为 2020-12；其余常见方言一并接受。
+const SUPPORTED_SCHEMA_DIALECTS: [&str; 4] = [
+    "https://json-schema.org/draft/2020-12/schema",
+    "https://json-schema.org/draft/2019-09/schema",
+    "http://json-schema.org/draft-07/schema#",
+    "http://json-schema.org/draft-04/schema#",
+];
 
 /// 一条校验结果。
+///
+/// `warning` 为真时表示「新规则暂未阻断发布」：不计入失败数，
+/// `dytes check` 输出 `WARN`，后续版本再升级为失败。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckItem {
     pub label: String,
     pub ok: bool,
     pub detail: String,
+    pub warning: bool,
+}
+
+impl CheckItem {
+    /// 机器可读的结果级别：`pass` / `warning` / `error`。
+    pub fn severity(&self) -> &'static str {
+        if self.warning {
+            "warning"
+        } else if self.ok {
+            "pass"
+        } else {
+            "error"
+        }
+    }
 }
 
 /// 一次清单校验的全部结果。
@@ -52,11 +82,23 @@ impl CheckReport {
         self.record(label, false, detail);
     }
 
+    /// 记录一条暂不阻断的警告。
+    pub fn warn(&mut self, label: impl Into<String>, detail: impl Into<String>) {
+        let item = CheckItem {
+            label: label.into(),
+            detail: detail.into(),
+            ok: true,
+            warning: true,
+        };
+        self.items.push(item);
+    }
+
     pub fn record(&mut self, label: impl Into<String>, ok: bool, detail: impl Into<String>) {
         self.items.push(CheckItem {
             label: label.into(),
-            ok,
             detail: detail.into(),
+            ok,
+            warning: false,
         });
     }
 
@@ -72,14 +114,24 @@ impl CheckReport {
         self.failures().count()
     }
 
+    pub fn warning_count(&self) -> usize {
+        self.items.iter().filter(|item| item.warning).count()
+    }
+
     pub fn passed(&self) -> bool {
         self.failure_count() == 0
     }
 
-    /// 按 `PASS / FAIL` 逐项打印，并输出汇总。
+    /// 按 `PASS / WARN / FAIL` 逐项打印，并输出汇总。
     pub fn print(&self) {
         for item in &self.items {
-            let status = if item.ok { "PASS" } else { "FAIL" };
+            let status = if item.warning {
+                "WARN"
+            } else if item.ok {
+                "PASS"
+            } else {
+                "FAIL"
+            };
             if item.detail.is_empty() {
                 println!("{status} {}", item.label);
             } else {
@@ -87,9 +139,11 @@ impl CheckReport {
             }
         }
         println!();
-        match self.failure_count() {
-            0 => println!("OK: 包结构检查通过"),
-            count => println!("FAILED: {count} 项"),
+        match (self.failure_count(), self.warning_count()) {
+            (0, 0) => println!("OK: 包结构检查通过"),
+            (0, warnings) => println!("OK: 包结构检查通过（{warnings} 条警告）"),
+            (count, 0) => println!("FAILED: {count} 项"),
+            (count, warnings) => println!("FAILED: {count} 项，{warnings} 条警告"),
         }
     }
 }
@@ -299,29 +353,343 @@ fn check_mcp(
             .unwrap_or_else(|| "<缺失>".to_string()),
     );
 
+    // 官方没有这些顶层字段；未知字段当前被忽略，先给出警告避免静默失效。
+    if let Some(object) = value.as_object() {
+        for field in object.keys() {
+            if !MCP_TOP_LEVEL_FIELDS.contains(&field.as_str()) {
+                report.warn(
+                    format!("mcp.json 字段已知: {field}"),
+                    "非标准字段，当前实现会忽略",
+                );
+            }
+        }
+    }
+
     let Some(list) = tools.and_then(Value::as_array) else {
         return;
     };
-    for tool in list {
-        let Some(tool) = tool.as_str() else {
-            report.fail("mcp 工具文件名合法", tool.to_string());
-            continue;
-        };
-        if tool.contains('/') || tool.contains('\\') {
-            report.fail(
-                format!("mcp 文件名合法: {tool}"),
-                "只能是不带目录的文件名",
-            );
-            continue;
+
+    let declared_deps: HashSet<String> = manifest
+        .get("dependencies-sys")
+        .and_then(Value::as_object)
+        .map(|deps| deps.keys().cloned().collect())
+        .unwrap_or_default();
+    let mut names: HashMap<String, String> = HashMap::new();
+
+    for (index, tool) in list.iter().enumerate() {
+        match tool {
+            Value::String(file) => {
+                if file.contains('/') || file.contains('\\') {
+                    report.fail(
+                        format!("mcp 文件名合法: {file}"),
+                        "只能是不带目录的文件名",
+                    );
+                    continue;
+                }
+                let exported = export_targets.get(file).is_some_and(|path| path.is_file());
+                report.record(
+                    format!("mcp 工具已导出: {file}"),
+                    exported,
+                    export_targets
+                        .get(file)
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_else(|| "<未导出>".to_string()),
+                );
+                if !exported {
+                    continue;
+                }
+                let tool_path = export_targets
+                    .get(file)
+                    .expect("已确认导出目标存在")
+                    .clone();
+                let parsed = fs::read_to_string(&tool_path)
+                    .map_err(|error| error.to_string())
+                    .and_then(|text| {
+                        serde_json::from_str::<Value>(&text).map_err(|error| error.to_string())
+                    });
+                match parsed {
+                    Ok(Value::Object(object)) => {
+                        check_tool_fields(report, file, &object, &declared_deps, &mut names, false);
+                    }
+                    Ok(other) => report.warn(
+                        format!("mcp 工具描述为对象: {file}"),
+                        other.to_string(),
+                    ),
+                    Err(error) => {
+                        report.warn(format!("mcp 工具描述可解析: {file}"), error);
+                    }
+                }
+            }
+            Value::Object(object) => {
+                let name = object
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .unwrap_or("");
+                report.record(
+                    format!("mcp 工具 name 非空: tools[{index}]"),
+                    !name.is_empty(),
+                    if name.is_empty() {
+                        "<缺失>".to_string()
+                    } else {
+                        name.to_string()
+                    },
+                );
+
+                if let Some(symbol) = object.get("ffi_symbol") {
+                    let symbol = symbol.as_str().map(str::trim).unwrap_or("");
+                    report.record(
+                        format!("mcp 工具 ffi_symbol 非空: {name}"),
+                        !symbol.is_empty(),
+                        symbol.to_string(),
+                    );
+                }
+
+                check_tool_fields(
+                    report,
+                    &format!("mcp.json tools[{index}]"),
+                    object,
+                    &declared_deps,
+                    &mut names,
+                    true,
+                );
+            }
+            _ => report.fail("mcp 工具为对象或文件名", tool.to_string()),
         }
-        let exported = export_targets.get(tool).is_some_and(|path| path.is_file());
-        report.record(
-            format!("mcp 工具已导出: {tool}"),
-            exported,
-            export_targets
-                .get(tool)
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "<未导出>".to_string()),
+    }
+}
+
+/// 按官方字段规范校验单个工具（内联对象或工具描述文件）。
+///
+/// `strict` 为真（内联对象）时，schema 类型错误沿用失败；
+/// 引用形态的新增规则统一先给警告，避免中断已发布包。
+fn check_tool_fields(
+    report: &mut CheckReport,
+    source: &str,
+    object: &serde_json::Map<String, Value>,
+    declared_deps: &HashSet<String>,
+    names: &mut HashMap<String, String>,
+    strict: bool,
+) {
+    let name = object
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("");
+    let label = if name.is_empty() { source } else { name };
+
+    if name.is_empty() {
+        if !strict {
+            report.warn(format!("mcp 工具 name 非空: {source}"), "<缺失>");
+        }
+    } else {
+        let len = name.chars().count();
+        if len > MAX_TOOL_NAME {
+            report.warn(
+                format!("mcp 工具 name 长度合法: {name}"),
+                format!("{len} 字符，应为 1-{MAX_TOOL_NAME}"),
+            );
+        }
+        if let Some(bad) = name
+            .chars()
+            .find(|c| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.')))
+        {
+            report.warn(
+                format!("mcp 工具 name 字符集合法: {name}"),
+                format!("包含 '{bad}'，仅允许 A-Z a-z 0-9 _ - ."),
+            );
+        }
+        if let Some(first) = names.get(name) {
+            report.warn(
+                format!("mcp 工具 name 唯一: {name}"),
+                format!("与 {first} 重复"),
+            );
+        } else {
+            names.insert(name.to_string(), source.to_string());
+        }
+    }
+
+    if let Some(title) = object.get("title") {
+        match title.as_str() {
+            Some(title) if title.chars().count() <= MAX_TOOL_TITLE => {}
+            Some(title) => report.warn(
+                format!("mcp 工具 title 长度: {label}"),
+                format!("{} 字符，建议不超过 {MAX_TOOL_TITLE}", title.chars().count()),
+            ),
+            None => report.warn(format!("mcp 工具 title 为字符串: {label}"), title.to_string()),
+        }
+    }
+
+    if let Some(description) = object.get("description") {
+        match description.as_str() {
+            Some(description) if description.chars().count() <= MAX_DESCRIPTION => {}
+            Some(description) => report.warn(
+                format!("mcp 工具 description 长度: {label}"),
+                format!(
+                    "{} 字符，建议不超过 {MAX_DESCRIPTION}",
+                    description.chars().count()
+                ),
+            ),
+            None => report.warn(
+                format!("mcp 工具 description 为字符串: {label}"),
+                description.to_string(),
+            ),
+        }
+    }
+
+    match object.get("inputSchema") {
+        None => report.warn(format!("mcp 工具 inputSchema 存在: {label}"), "<缺失>"),
+        Some(schema) if !schema.is_object() => {
+            let detail = schema.to_string();
+            if strict {
+                report.fail(format!("mcp 工具 inputSchema 为对象: {label}"), detail);
+            } else {
+                report.warn(format!("mcp 工具 inputSchema 为对象: {label}"), detail);
+            }
+        }
+        Some(schema) => check_tool_schema(report, label, "inputSchema", schema, true),
+    }
+
+    match object.get("outputSchema") {
+        None => {}
+        Some(schema) if !schema.is_object() => {
+            let detail = schema.to_string();
+            if strict {
+                report.fail(format!("mcp 工具 outputSchema 为对象: {label}"), detail);
+            } else {
+                report.warn(format!("mcp 工具 outputSchema 为对象: {label}"), detail);
+            }
+        }
+        Some(schema) => check_tool_schema(report, label, "outputSchema", schema, false),
+    }
+
+    if let Some(annotations) = object.get("annotations") {
+        match annotations.as_object() {
+            None => report.warn(
+                format!("mcp 工具 annotations 为对象: {label}"),
+                annotations.to_string(),
+            ),
+            Some(annotations) => {
+                if let Some(title) = annotations.get("title") {
+                    if !title.is_string() {
+                        report.warn(
+                            format!("mcp 工具 annotations.title 为字符串: {label}"),
+                            title.to_string(),
+                        );
+                    }
+                }
+                for field in [
+                    "readOnlyHint",
+                    "destructiveHint",
+                    "idempotentHint",
+                    "openWorldHint",
+                ] {
+                    if let Some(value) = annotations.get(field) {
+                        if !value.is_boolean() {
+                            report.warn(
+                                format!("mcp 工具 annotations.{field} 为布尔值: {label}"),
+                                value.to_string(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(transport) = object.get("transport") {
+        match transport.as_object() {
+            None => report.warn(
+                format!("mcp 工具 transport 为对象: {label}"),
+                transport.to_string(),
+            ),
+            Some(transport) => {
+                match transport
+                    .get("library")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                {
+                    Some(library) if !library.is_empty() => {
+                        if !declared_deps.contains(library) {
+                            report.warn(
+                                format!("mcp 工具依赖已声明: {library}"),
+                                "请在 dytes.json 的 dependencies-sys 中声明",
+                            );
+                        }
+                    }
+                    _ => report.warn(
+                        format!("mcp 工具 transport.library 非空: {label}"),
+                        "<缺失>",
+                    ),
+                }
+                let uuid_ok = transport
+                    .get("library_uuid")
+                    .and_then(Value::as_str)
+                    .is_some_and(|uuid| !uuid.trim().is_empty());
+                if !uuid_ok {
+                    report.warn(
+                        format!("mcp 工具 transport.library_uuid 非空: {label}"),
+                        "<缺失>",
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// 校验工具 schema：方言、根类型（仅输入）、无参约定。
+fn check_tool_schema(
+    report: &mut CheckReport,
+    label: &str,
+    field: &str,
+    schema: &Value,
+    is_input: bool,
+) {
+    if let Some(dialect) = schema.get("$schema") {
+        match dialect.as_str() {
+            Some(dialect) if SUPPORTED_SCHEMA_DIALECTS.contains(&dialect) => {}
+            Some(dialect) => report.warn(
+                format!("mcp 工具 {field} 方言受支持: {label}"),
+                format!("{dialect}；建议使用 JSON Schema 2020-12"),
+            ),
+            None => report.warn(
+                format!("mcp 工具 {field} 方言为字符串: {label}"),
+                dialect.to_string(),
+            ),
+        }
+    }
+
+    if !is_input {
+        return;
+    }
+
+    match schema.get("type") {
+        Some(Value::String(kind)) if kind == "object" => {}
+        Some(other) => report.warn(
+            format!("mcp 工具 inputSchema 根为 object: {label}"),
+            other.to_string(),
+        ),
+        None => report.warn(
+            format!("mcp 工具 inputSchema 根为 object: {label}"),
+            "<缺少 type>",
+        ),
+    }
+
+    let no_properties = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .is_none_or(|properties| properties.is_empty());
+    let no_required = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .is_none_or(|required| required.is_empty());
+    if no_properties
+        && no_required
+        && schema.get("additionalProperties") != Some(&Value::Bool(false))
+    {
+        report.warn(
+            format!("mcp 工具 inputSchema 无参声明: {label}"),
+            "建议 {\"type\":\"object\",\"additionalProperties\":false}",
         );
     }
 }
@@ -602,5 +970,24 @@ mod tests {
         let report = check_design_plugin(dir.path(), &manifest(), "windows");
         let labels: Vec<&str> = report.failures().map(|item| item.label.as_str()).collect();
         assert!(labels.iter().any(|label| label.contains("mcp 工具已导出")));
+    }
+
+    #[test]
+    fn accepts_object_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut value = manifest();
+        value["use_ai"] = json!(false);
+        value.as_object_mut().unwrap().remove("skills");
+        value["exports"] = json!({
+            "./target/release/cdr_check_txt.dll": "cdr_check_txt.dll",
+            "./mcp/mcp.json": "mcp.json"
+        });
+        prepare(dir.path(), &value);
+        write(
+            dir.path().join("mcp/mcp.json"),
+            r#"{"tools":[{"name":"demo","ffi_symbol":"post_chat","inputSchema":{},"outputSchema":{}}]}"#,
+        );
+        let report = check_design_plugin(dir.path(), &value, "windows");
+        assert!(report.passed(), "{:#?}", report.items);
     }
 }

@@ -41,6 +41,13 @@ dytes check [<dir>] [--type <type>] [--platform <platform>] [--manifest-only] [-
      - `use_ai` 为布尔值；
      - `exports` 目标只能是文件名，源文件存在；
      - `mcp.json` 存在、`tools` 为非空数组、工具已导出；
+     - 工具名长度（≤128）、字符集（`A-Z a-z 0-9 _ - .`）、全包唯一；
+     - 引用形态的工具文件可解析且为对象；
+     - `inputSchema` 存在、根为 `object`、`$schema` 方言受支持、无参时建议
+       `additionalProperties: false`；
+     - `title` / `description` / `annotations` 类型与长度；
+     - `transport.library` / `library_uuid` 非空，`library` 已在
+       `dependencies-sys` 声明；
      - `use_ai=true` 时校验 `skills.json` 与技能导出。
 5. 汇总输出；有失败项返回 `3`。
 
@@ -51,9 +58,10 @@ dytes check [<dir>] [--type <type>] [--platform <platform>] [--manifest-only] [-
 ```text
 PASS dytes.json 可解析  D:\pkg\dytes.json
 PASS exports 非空  1 个
+WARN mcp 工具 inputSchema 存在: demo  <缺失>
 PASS exports 文件存在: ./bin/demo.exe  D:\pkg\bin\demo.exe
 
-OK: 包结构检查通过
+OK: 包结构检查通过（1 条警告）
 ```
 
 `--json`：
@@ -62,11 +70,15 @@ OK: 包结构检查通过
 {
   "passed": false,
   "checks": [
-    { "label": "dytes.json 可解析", "ok": true, "detail": "D:\\pkg\\dytes.json" },
-    { "label": "exports 文件存在: ./bin/demo.exe", "ok": false, "detail": "D:\\pkg\\bin\\demo.exe" }
+    { "label": "dytes.json 可解析", "ok": true, "detail": "D:\\pkg\\dytes.json", "severity": "pass" },
+    { "label": "exports 文件存在: ./bin/demo.exe", "ok": false, "detail": "D:\\pkg\\bin\\demo.exe", "severity": "error" },
+    { "label": "mcp 工具 inputSchema 存在: demo", "ok": true, "detail": "<缺失>", "severity": "warning" }
   ]
 }
 ```
+
+`severity` 取值 `pass` / `warning` / `error`；`passed` 只由 `error` 决定，
+警告不影响退出码与发布。
 
 ## 5. 退出码
 
@@ -81,6 +93,8 @@ OK: 包结构检查通过
 - 全程离线，不读取 S3；
 - 只校验文件是否存在，不校验 checksum（由 `test` / 安装流程负责）；
 - `--manifest-only` 只放宽“必须有 exports”，其它规则仍生效；
+- 与官方 MCP 对齐的新增规则（名称规则、schema、annotations、transport）
+  当前以 `WARN` 输出，不计入失败，后续版本再升级为 `FAIL`；
 - 路径安全由发布与安装流程负责，`check` 只报告缺失；
 - 设计插件规则与文档仓库 `sysinfo/design_plugins/dytes-manifest.md` §3 对齐。
 
@@ -90,9 +104,14 @@ OK: 包结构检查通过
 - 导出缺失返回 `3` 且 stderr 含“清单校验失败”；
 - `--type` 不一致返回 `3`；
 - `--manifest-only` 允许无导出；
-- `--json` 输出 `passed` 与 `checks`；
+- `--json` 输出 `passed`、`checks` 与 `severity`；
 - `platform-exports` 缺少平台时失败；
-- 清单缺失返回 `3`。
+- 清单缺失返回 `3`；
+- 工具名超长、含空格或重名时只产生 `WARN`，不影响退出码；
+- `inputSchema` 缺失、根非 `object`、未知 `$schema` 方言时产生 `WARN`；
+- `transport.library` 未在 `dependencies-sys` 声明时产生 `WARN`；
+- 引用形态工具文件不可解析时产生 `WARN`；
+- 内联对象 `inputSchema` 不是对象时仍返回 `3`。
 
 对应测试文件：`tests/cli_check.rs`。
 

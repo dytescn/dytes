@@ -67,7 +67,9 @@ tests/             集成测试
 - `design_plugins` / `design_soft` 不写入应用根清单，只记录在 `dytes.lock`；
 - `test-dependency` 按包类型分组，仅用于 `dytes test`；它不会参与普通
   `update`，测试时与清单 `dependencies-*` 合并后在线更新下载到 `.dytes/env/`
-  （当前包自身不下载，见 [commands/test.md §4.1](commands/test.md#41-依赖下载规则)）。
+  （当前包自身不下载，见 [commands/test.md §4.1](commands/test.md#41-依赖下载规则)）；
+- 设计插件的 `mcp` 字段固定为 `mcp.json`，MCP 工具的文件布局、字段与校验规则
+  见 [mcp.md](mcp.md)。
 
 ### 3.3 锁文件 `dytes.lock`
 

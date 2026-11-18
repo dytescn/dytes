@@ -62,6 +62,8 @@ cargo build --release --features gui
 
 - [设计与包模型](docs/dytes.md)
 - [命令清单](docs/cmd.md)
+- [设计插件 MCP 规范](docs/mcp.md)
+- [官方 MCP 规范对照](docs/mcp-official.md)
 - [GitHub Action](docs/action.md)
 - [已知问题](docs/issues.md)
 - [代码规范](skills/code.md)

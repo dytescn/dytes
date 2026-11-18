@@ -170,6 +170,19 @@ fn close_installer(ui: &MainWindow) {
 /// `dir` 为空时使用当前目录；点击“开始更新”后通过内置更新引擎执行。
 pub fn run_update_gui(dir: Option<PathBuf>) -> Result<()> {
     let ui = UpdatePage::new().context("创建更新窗口失败")?;
+
+    // 窗口显示后再置顶：映射前设置 window level 会被丢弃（见 update.slint 注释）。
+    {
+        let weak = ui.as_weak();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_pin_top(true);
+                }
+            });
+        });
+    }
     ui.set_status_text("点击按钮检查并安装更新".into());
 
     // 窗口打开即延后下次更新检测，避免用户忽略窗口时反复检测。

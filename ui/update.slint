@@ -60,6 +60,13 @@ export component UpdatePage inherits Window {
     width: 400px;
     height: 260px;
     title: "Piksel 更新";
+    // 置顶：kiosk 场景下宿主应用（如 screen）是全屏窗口，更新窗口必须压在它之上，
+    // 否则按钮会被遮挡、点击落到宿主窗口里。
+    //
+    // 不在窗口映射前直接置 true：Slint 在映射前应用 window level 会丢失，
+    // 之后属性不再变化就不会重试。这里由 Rust 侧在窗口显示后把 pin_top 置 true。
+    in-out property <bool> pin_top: false;
+    always-on-top: pin_top;
     background: #F3F4F6;
 
     in property <string> status_text: "";

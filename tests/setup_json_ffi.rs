@@ -53,7 +53,7 @@ fn executes_setup_json_through_database_ffi() {
                 "url": "http://127.0.0.1:44944/database",
                 "headers": { "FFI-Symbol": "db_update" },
                 "body": {
-                    "path": "./plugins",
+                    "path": "plugins",
                     "sql": "CREATE TABLE IF NOT EXISTS ffi_test (id INTEGER PRIMARY KEY, name TEXT)"
                 }
             },
@@ -61,7 +61,7 @@ fn executes_setup_json_through_database_ffi() {
                 "url": "http://127.0.0.1:44944/database",
                 "headers": { "FFI-Symbol": "db_update" },
                 "body": {
-                    "path": "./plugins",
+                    "path": "plugins",
                     "sql": "DROP TABLE IF EXISTS ffi_test"
                 },
                 "allow_error": true

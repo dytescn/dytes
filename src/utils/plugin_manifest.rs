@@ -160,8 +160,19 @@ pub fn check_design_plugin(dir: &Path, manifest: &Value, platform: &str) -> Chec
     check_targets(&mut report, manifest);
     let use_ai = check_use_ai(&mut report, manifest);
     let export_targets = check_exports(&mut report, dir, manifest, platform);
-    check_mcp(&mut report, manifest, &export_targets);
-    check_skills(&mut report, manifest, &export_targets, use_ai);
+
+    // `design_*` 以及旧的 `plugins` / `plugins_coreldraw` 设计插件要求
+    // mcp / skills；`sys_plugins` 等系统插件不要求。
+    let plugins_type = manifest
+        .get("plugins_type")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let requires_content = plugins_type.starts_with("design_")
+        || matches!(plugins_type, "plugins" | "plugins_coreldraw");
+    if requires_content {
+        check_mcp(&mut report, manifest, &export_targets);
+        check_skills(&mut report, manifest, &export_targets, use_ai);
+    }
 
     report
 }
@@ -197,8 +208,8 @@ fn check_identity(report: &mut CheckReport, manifest: &Value) {
 
     let pkg_type = manifest.get("type").and_then(Value::as_str).unwrap_or("");
     report.record(
-        "type == design_plugins",
-        pkg_type == "design_plugins",
+        "type 为 plugins / design_plugins",
+        matches!(pkg_type, "plugins" | "design_plugins"),
         pkg_type,
     );
 }
@@ -211,6 +222,19 @@ fn check_plugins_type(report: &mut CheckReport, manifest: &Value) {
 }
 
 fn check_targets(report: &mut CheckReport, manifest: &Value) {
+    // 新规范使用单数 `target`；旧清单可能仍是 `targets` 数组。
+    if manifest.get("targets").is_none() {
+        if let Some(value) = manifest.get("target") {
+            let detail = value.to_string();
+            let target = value.as_str().unwrap_or("");
+            let ok = !target.trim().is_empty()
+                && target == target.to_lowercase()
+                && KNOWN_TARGETS.contains(&target);
+            report.record("target 取值合法", ok, detail);
+            return;
+        }
+    }
+
     let Some(targets) = manifest.get("targets") else {
         report.fail("targets 为非空字符串数组", "<缺失>");
         return;
@@ -260,15 +284,33 @@ fn check_targets(report: &mut CheckReport, manifest: &Value) {
 
 fn check_use_ai(report: &mut CheckReport, manifest: &Value) -> Option<bool> {
     let value = manifest.get("use_ai");
-    let parsed = value.and_then(Value::as_bool);
+    let parsed = value.and_then(parse_use_ai);
     report.record(
-        "use_ai 为布尔值",
+        "use_ai 为布尔值或 0/1",
         parsed.is_some(),
         value
             .map(ToString::to_string)
             .unwrap_or_else(|| "<缺失>".to_string()),
     );
     parsed
+}
+
+/// 规范允许 `true/false`、`0/1` 以及对应的字符串形式。
+fn parse_use_ai(value: &Value) -> Option<bool> {
+    match value {
+        Value::Bool(flag) => Some(*flag),
+        Value::Number(number) => match number.as_i64() {
+            Some(0) => Some(false),
+            Some(1) => Some(true),
+            _ => None,
+        },
+        Value::String(text) => match text.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// 选择导出表并校验每个导出文件；返回“远程文件名 -> 本地路径”。
@@ -935,8 +977,7 @@ mod tests {
         let labels: Vec<&str> = report.failures().map(|item| item.label.as_str()).collect();
         assert!(labels.contains(&"plugins_type 取值合法"));
         assert!(labels.contains(&"targets 为非空字符串数组"));
-        assert!(labels.contains(&"use_ai 为布尔值"));
-        assert!(labels.contains(&"mcp == mcp.json"));
+        assert!(labels.contains(&"use_ai 为布尔值或 0/1"));
     }
 
     #[test]

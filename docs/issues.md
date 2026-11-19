@@ -340,3 +340,86 @@ dytes self-update --json    # 机器可读结果
   [../skills/testenv.md](../skills/testenv.md) 已同步。
 - 集成测试覆盖：合并覆盖规则、下载失败中止、非法类型；下载成功路径需要真实
   S3 环境，未纳入自动化测试。
+
+---
+
+## I-07 `dytes test` 在 Windows 上因 verbatim 路径失败（os error 123）
+
+**发现日期**：2026-11-19
+**影响版本**：`dytes` 0.2.4（Windows）
+**影响范围**：所有在 Windows 上执行 `dytes test` 且带依赖的包
+**严重程度**：P1 —— 依赖安装阶段直接失败，测试环境无法建立
+**状态**：已定位，本地修复已验证；待合并 / 发布
+
+### 1. 现象
+
+Windows 上执行 `dytes test`，清单自检与 `.dytes` 创建均通过，但依赖安装阶段失败：
+
+```text
+PASS 测试目录已就绪  ...\.dytes
+PASS 测试依赖清单已就绪  ...\.dytes\env\dytes.json
+FAIL 依赖安装  依赖下载失败: 文件名、目录名或卷标语法不正确。 (os error 123)
+```
+
+错误信息没有上下文，且与网络、凭据、包版本无关：即使 S3 清单能正常读取
+（`从 S3 获取: system/database/dytes.json` 成功），仍然在同一位置失败。
+
+### 2. 复现
+
+1. 任一带 `dependencies-sys` 的包，在 Windows 上 `cargo build --release`；
+2. 执行 `dytes test`；
+3. 依赖安装阶段必然返回 `os error 123`。
+
+HANDLE 层可直接复现同样的错误：
+
+```python
+import os
+prefix = chr(92) * 2 + "?" + chr(92)          # \\?\
+base = os.path.abspath("_probe")
+os.makedirs(prefix + base + "/libary")        # WinError 123
+os.makedirs(prefix + base + "\\libary")       # OK
+```
+
+### 3. 根因
+
+`src/test.rs::run_dependency_install` 先对 `.dytes/env` 执行 `canonicalize()`。
+Windows 的 `std::fs::canonicalize` 返回 `\\?\D:\...` 形式的 verbatim 路径；
+该路径被写入 `DYTES_APP_DIR` 后，更新引擎用字符串拼接构造子目录：
+
+```rust
+let lib_dir = format!("{}/libary", app_dir.trim_end_matches('/'));
+fs::create_dir_all(&lib_dir)?;
+```
+
+verbatim 路径只接受 `\` 作为分隔符，混入 `/` 后 `CreateDirectoryW` 返回
+`ERROR_INVALID_NAME`（123）。因此失败发生在下载第一个依赖之前。
+
+正常安装路径不受影响：那里 `app_dir` 来自 `current_dir()`，不是 verbatim 形式。
+
+### 4. 修复
+
+canonicalize 之后去掉 `\\?\` 前缀，再交给更新引擎：
+
+```rust
+let env_dir = strip_verbatim_prefix(env_dir);
+
+fn strip_verbatim_prefix(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy().into_owned();
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        path
+    }
+}
+```
+
+也可考虑根治：更新引擎内部统一改用 `Path::join`，避免用 `format!` 拼路径。
+
+### 5. 验证
+
+- 修复前：`依赖安装 ... os error 123`；
+- 修复后：错误变为正常的依赖下载流程（本地无内置 S3 凭据时提示
+  `S3 对象读取失败`，说明路径问题已消失）；
+- 使用公开 CDN 手动补齐 `.dytes/env/libary` 后，用该环境完成了
+  `cloud_lib` 的四条 FFI 用例，环境布局与 `dytes test` 一致。
+

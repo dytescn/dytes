@@ -315,6 +315,16 @@ fn install_test_dependencies(
     Ok(installed)
 }
 
+/// 去掉 Windows canonicalize 产生的 `\\?\` 前缀，避免后续字符串拼接 `/` 失败。
+fn strip_verbatim_prefix(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy().into_owned();
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        path
+    }
+}
+
 /// 以 `.dytes/env/` 为安装根运行更新引擎。
 ///
 /// 更新引擎的锁文件使用相对路径，因此临时切换工作目录并设置
@@ -323,6 +333,10 @@ fn run_dependency_install(env_dir: &Path, config: &DytesConfig) -> Result<()> {
     let env_dir = env_dir.canonicalize().map_err(|e| {
         DytesError::failed(format!("解析测试环境目录失败: {}: {e}", env_dir.display()))
     })?;
+    // Windows 的 canonicalize 会返回 `\\?\` 前缀；后续更新引擎用
+    // `format!("{app_dir}/libary")` 拼接正斜杠，verbatim 路径不接受 `/`，
+    // 会返回 os error 123（文件名、目录名或卷标语法不正确）。
+    let env_dir = strip_verbatim_prefix(env_dir);
     let previous_dir = std::env::current_dir()
         .map_err(|e| DytesError::failed(format!("读取当前目录失败: {e}")))?;
     let previous_app_dir = std::env::var_os("DYTES_APP_DIR");

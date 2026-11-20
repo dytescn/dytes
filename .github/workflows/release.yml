@@ -293,6 +293,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload binary to UpYun S3
+        if: runner.os != 'macOS'
         uses: shallwefootball/s3-upload-action@master
         with:
           aws_key_id: ${{ secrets.UPYUN_API_KEY }}
@@ -302,7 +303,29 @@ jobs:
           destination_dir: core/dytes/${{ steps.version.outputs.version }}/${{ matrix.platform }}
           endpoint: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
 
+      # macOS runner 上该 action 会按 virtual-host 方式解析 endpoint（<bucket>.s3...），
+      # 导致 UnknownEndpoint；改用预装的 aws cli 并强制 path style。
+      - name: Upload binary to UpYun S3 (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.UPYUN_API_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.UPYUN_API_SECRET }}
+          AWS_DEFAULT_REGION: us-east-1
+          UPYUN_BUCKET: ${{ secrets.UPYUN_BUCKET }}
+          UPYUN_ENDPOINT: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          aws configure set default.s3.addressing_style path
+          for file in upload/*; do
+            aws s3 cp "$file" "s3://$UPYUN_BUCKET/core/dytes/$VERSION/$PLATFORM/$(basename "$file")" \
+              --endpoint-url "$UPYUN_ENDPOINT"
+          done
+
       - name: Publish latest alias
+        if: runner.os != 'macOS'
         uses: shallwefootball/s3-upload-action@master
         with:
           aws_key_id: ${{ secrets.UPYUN_API_KEY }}
@@ -311,6 +334,24 @@ jobs:
           source_dir: upload
           destination_dir: core/dytes/latest/${{ matrix.platform }}
           endpoint: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
+
+      - name: Publish latest alias (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.UPYUN_API_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.UPYUN_API_SECRET }}
+          AWS_DEFAULT_REGION: us-east-1
+          UPYUN_BUCKET: ${{ secrets.UPYUN_BUCKET }}
+          UPYUN_ENDPOINT: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          aws configure set default.s3.addressing_style path
+          for file in upload/*; do
+            aws s3 cp "$file" "s3://$UPYUN_BUCKET/core/dytes/latest/$PLATFORM/$(basename "$file")" \
+              --endpoint-url "$UPYUN_ENDPOINT"
+          done
 
       - name: Set short cache TTL on latest alias
         continue-on-error: true

@@ -42,7 +42,7 @@ runs:
         esac
         case "${{ runner.os }}" in
           Windows) asset="dytes-windows.exe" ;;
-          Linux)   asset="dytes-action.bin" ;;
+          Linux)   asset="dytes-linux.bin" ;;
           macOS)   asset="dytes-macos.bin" ;;
           *)
             echo "::error::不支持的 runner: ${{ runner.os }}"

@@ -266,7 +266,15 @@ pub fn publish_with_options(
     let pkg_type = config.pkg_type.as_deref().unwrap_or("");
     if !matches!(
         pkg_type,
-        "app" | "core" | "sys" | "web" | "design_plugins" | "design_soft" | "model"
+        "app"
+            | "core"
+            | "sys"
+            | "web"
+            | "design_plugins"
+            | "design_soft"
+            | "model"
+            | "plugins"
+            | "plugin"
     ) {
         bail!(
             "不支持的包类型 '{}'，应为 app / core / sys / web / design_plugins / design_soft / model",

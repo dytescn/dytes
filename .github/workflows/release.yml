@@ -177,7 +177,7 @@ jobs:
           - os: macos-latest
             platform: macos
             binary: dytes
-            artifact: dytes-macos.app
+            artifact: dytes-macos.bin
             package: dytes.app
     steps:
       - name: Checkout repository

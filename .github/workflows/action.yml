@@ -26,13 +26,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Require Linux runner
-      if: runner.os != 'Linux'
-      shell: bash
-      run: |
-        echo "::error::dytes Action 只提供 Linux 无 GUI 构建，请使用 ubuntu runner"
-        exit 1
-
     - name: Download dytes
       shell: bash
       env:
@@ -47,15 +40,27 @@ runs:
             exit 1
             ;;
         esac
-        asset="dytes-action.bin"
+        case "${{ runner.os }}" in
+          Windows) asset="dytes-windows.exe" ;;
+          Linux)   asset="dytes-action.bin" ;;
+          macOS)   asset="dytes-macos.bin" ;;
+          *)
+            echo "::error::不支持的 runner: ${{ runner.os }}"
+            exit 1
+            ;;
+        esac
         url="https://github.com/dytescn/dytes/releases/download/v${version}/${asset}"
         bin_dir="${RUNNER_TEMP}/dytes-bin"
         mkdir -p "${bin_dir}"
         curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 --retry-connrefused \
           "${url}" -o "${bin_dir}/dytes"
-        chmod +x "${bin_dir}/dytes"
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          mv "${bin_dir}/dytes" "${bin_dir}/dytes.exe"
+        fi
+        chmod +x "${bin_dir}/dytes" 2>/dev/null || true
+        chmod +x "${bin_dir}/dytes.exe" 2>/dev/null || true
         echo "${bin_dir}" >> "${GITHUB_PATH}"
-        "${bin_dir}/dytes" --version
+        "${bin_dir}/dytes" --version || "${bin_dir}/dytes.exe" --version
 
     - name: Run dytes
       shell: bash

@@ -64,6 +64,17 @@ fn install_sys_offline_requires_explicit_version() {
     assert!(stderr(&out).contains("离线安装需要显式版本"));
 }
 
+#[test]
+fn install_sys_relative_dir_resolves_manifest() {
+    let env = TestEnv::new();
+    env.write_json("app/dytes.json", &app_manifest());
+
+    let out = env.run(&["install", "sys", "info_lib", "--dir", "app", "--offline"]);
+    // 修复前会二次拼接成 app/app/dytes.json，返回 3。
+    assert_code(&out, 2);
+    assert!(stderr(&out).contains("离线安装需要显式版本"));
+}
+
 #[cfg(not(feature = "gui"))]
 #[test]
 fn install_gui_reports_missing_feature() {

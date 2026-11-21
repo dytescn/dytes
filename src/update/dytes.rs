@@ -1,4 +1,4 @@
-use super::update_setup::run_all_init_scripts;
+use super::update_setup::{cyctron_available, run_all_init_scripts};
 use super::{update_app, update_design, update_model, update_os, update_sys, update_webs};
 use crate::utils::dytes::{
     get_all_dependencies, print_config_info, read_dytes_config, Dependency, DependencyType,
@@ -414,7 +414,16 @@ pub async fn install_one_dependency(
     );
     scripts.retain(|(_, init_scripts)| !init_scripts.is_empty());
     if !scripts.is_empty() {
-        run_all_init_scripts(scripts).await?;
+        if cyctron_available() {
+            run_all_init_scripts(scripts).await?;
+        } else {
+            // 单包安装不包含 core 依赖，空应用目录里可能没有 cyctron；
+            // 此时包已安装完成，init 脚本留待 `dytes update` 安装 core 后执行。
+            println!(
+                "  警告: 未找到 cyctron，跳过 {} 个包的 init 脚本；请执行 dytes update 安装 core 后重试",
+                scripts.len()
+            );
+        }
     }
     Ok(())
 }

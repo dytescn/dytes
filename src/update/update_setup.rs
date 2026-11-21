@@ -10,6 +10,21 @@ use crate::update::script;
 
 const PID_FILE: &str = "./run.pid";
 
+/// cyctron 的候选文件名（发布产物按平台命名，安装器可能创建无后缀入口）。
+const CYCTRON_CANDIDATES: [&str; 4] = ["cyctron", "cyctron.exe", "cyctron.bin", "cyctron.app"];
+
+/// 指定目录是否存在 cyctron 可执行文件。
+pub fn cyctron_available_in(dir: &Path) -> bool {
+    CYCTRON_CANDIDATES
+        .iter()
+        .any(|name| dir.join(name).is_file())
+}
+
+/// 当前目录是否存在 cyctron 可执行文件。
+pub fn cyctron_available() -> bool {
+    cyctron_available_in(Path::new("."))
+}
+
 /// 检测 cyctron.exe 是否运行（若 PID 文件存在但进程已死，则清理文件并返回 false）
 pub fn is_cyctron_running() -> bool {
     let pid_path = Path::new(PID_FILE);
@@ -269,5 +284,18 @@ pub async fn run_all_init_scripts(scripts_list: Vec<(String, Vec<String>)>) -> R
     } else {
         println!("  所有 init 脚本执行完成");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_cyctron_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!cyctron_available_in(dir.path()));
+        std::fs::write(dir.path().join("cyctron.bin"), b"x").unwrap();
+        assert!(cyctron_available_in(dir.path()));
     }
 }

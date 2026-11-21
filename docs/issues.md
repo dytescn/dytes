@@ -430,7 +430,7 @@ fn strip_verbatim_prefix(path: PathBuf) -> PathBuf {
 **发现日期**：2026-11-16（GitHub #23）
 **影响版本**：0.2.2 起；`--dir` 问题在 0.2.11 仍存在
 **严重程度**：P1 —— 脚本中传相对 `--dir` 时无法读取清单
-**状态**：`--dir` 未修复；`dytes test` 只读 `test-dependency` 的部分已于 0.2.3 修复（见 I-06）
+**状态**：`--dir` 问题 0.2.12 已修复；`dytes test` 只读 `test-dependency` 的部分已于 0.2.3 修复（见 I-06）
 
 ### 1. 现象
 
@@ -465,11 +465,18 @@ let manifest_path = dir.join("dytes.json"); // 相对当前目录，被二次拼
 
 切到 `app` 后查找 `app/dytes.json`，实际变成 `app/app/dytes.json`。
 
-### 3. 修复方向
+### 3. 修复（0.2.12）
 
-- `set_current_dir` 之前把 `dir` 转成绝对路径（`std::fs::canonicalize` 或
-  `current_dir().join(dir)`），后续统一使用绝对路径；
-- 或在切换目录前读取清单，切换只影响依赖安装阶段。
+`set_current_dir` 之后重新获取绝对路径，后续统一使用：
+
+```rust
+std::env::set_current_dir(&dir)?;
+// `--dir` 可能是相对路径；切换后再取一次绝对路径，避免后续拼接
+// `dytes.json` 时把 `app` 又拼成 `app/app`。
+let dir = std::env::current_dir()?;
+```
+
+集成测试：`tests/cli_install.rs::install_sys_relative_dir_resolves_manifest`。
 
 ### 4. 备注
 
@@ -523,7 +530,8 @@ curl -I https://packages.funxdata.com/app/screen/dytes.json       # 200
 
 - 0.2.11 本地构建：错误信息变为明确的“S3 凭证未配置”提示；
 - 带内置凭据的发布版执行 `dytes self-update --check` 可读到 `core/dytes/dytes.json`
-  （发布 0.2.11 后返回 `v0.2.11`）。
+  （发布 0.2.11 后返回 `v0.2.11`）；
+- Linux 环境已实测 `dytes self-update` 从 0.2.10 升级到 0.2.11 成功（2026-11-22）。
 
 ---
 
@@ -588,7 +596,7 @@ issue 描述 `dytes init` 生成的 `dytes.json` 中出现 `"exports": {}`，期
 
 **发现日期**：2026-11-21 / 2026-11-22（GitHub #29、#30）
 **严重程度**：待定
-**状态**：待复现；部分疑为用法与 README 不一致
+**状态**：0.2.12 已修复相对 `--dir` 与 init 依赖 cyctron 两个已复现问题；#29 / #30 仍待补充复现信息
 
 ### 1. 现象
 
@@ -607,7 +615,17 @@ issue 描述 `dytes init` 生成的 `dytes.json` 中出现 `"exports": {}`，期
 - README 的快速开始仍写 `dytes install --gui --dir D:\Piksel`，与命令行行为不一致，
   容易让用户误以为 `install` 可以直接安装应用。
 
-### 3. 待办
+### 3. 0.2.12 修复
+
+- **相对 `--dir`**：切换目录后改用绝对路径，`dytes install sys <name> --dir app`
+  不再查找 `app/app/dytes.json`（见 I-08）；
+- **单包 install 的 init 脚本**：sys 包安装完成后若应用目录没有 cyctron，
+  打印警告并跳过 init，不再让整个安装返回失败。包与锁文件已完成安装，
+  执行 `dytes update` 安装 core 后可再次触发 init；
+- 集成测试：`tests/cli_install.rs::install_sys_relative_dir_resolves_manifest`；
+  单元测试：`update_setup::tests::detects_cyctron_candidates`。
+
+### 4. 待办
 
 - 请补充实际命令与完整错误输出，确认是否为 I-08 的相对 `--dir` 问题、I-09 的凭证问题，
   或仅仅是命令用法；

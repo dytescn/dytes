@@ -55,6 +55,9 @@ pub fn run(args: InstallArgs) -> Result<()> {
     let dir = args.dir.clone().unwrap_or(std::env::current_dir()?);
     std::env::set_current_dir(&dir)
         .map_err(|e| DytesError::failed(format!("切换目录失败: {e}")))?;
+    // `--dir` 可能是相对路径；切换后再取一次绝对路径，避免后续拼接
+    // `dytes.json` 时把 `app` 又拼成 `app/app`。
+    let dir = std::env::current_dir()?;
 
     let pkg_type = args.pkg_type.as_deref().ok_or_else(|| {
         DytesError::args("请指定包类型，例如：dytes install plugin cdr_check_txt")

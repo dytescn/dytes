@@ -1,7 +1,7 @@
 # dytes 已知问题
 
 > 记录实际使用中遇到的阻塞问题、复现方式与修复方向。
-> 最近更新：2026-11-16
+> 最近更新：2026-11-22（同步 GitHub #23 / #24 / #27 / #28 / #29 / #30）
 
 ---
 
@@ -349,7 +349,7 @@ dytes self-update --json    # 机器可读结果
 **影响版本**：`dytes` 0.2.4（Windows）
 **影响范围**：所有在 Windows 上执行 `dytes test` 且带依赖的包
 **严重程度**：P1 —— 依赖安装阶段直接失败，测试环境无法建立
-**状态**：已定位，本地修复已验证；待合并 / 发布
+**状态**：0.2.5 已修复并发布（提交 `6ddab92`）；对应 GitHub #23 的 Windows 部分
 
 ### 1. 现象
 
@@ -422,4 +422,195 @@ fn strip_verbatim_prefix(path: PathBuf) -> PathBuf {
   `S3 对象读取失败`，说明路径问题已消失）；
 - 使用公开 CDN 手动补齐 `.dytes/env/libary` 后，用该环境完成了
   `cloud_lib` 的四条 FFI 用例，环境布局与 `dytes test` 一致。
+
+---
+
+## I-08 GitHub #23：`install --dir` 相对路径二次拼接；`dytes test` 依赖语义
+
+**发现日期**：2026-11-16（GitHub #23）
+**影响版本**：0.2.2 起；`--dir` 问题在 0.2.11 仍存在
+**严重程度**：P1 —— 脚本中传相对 `--dir` 时无法读取清单
+**状态**：`--dir` 未修复；`dytes test` 只读 `test-dependency` 的部分已于 0.2.3 修复（见 I-06）
+
+### 1. 现象
+
+`dytes.json` 确实存在，但用相对路径传给 `--dir` 时仍报不存在：
+
+```bash
+$ dytes install sys chatllm --dir .dytes --no-init
+.dytes/dytes.json 不存在；请先执行 dytes init 或在应用目录运行
+```
+
+先 `cd .dytes` 再执行则正常。
+
+0.2.11 复核（`target/release/dytes.exe`，相对 `--dir app`）：
+
+```text
+app\dytes.json 不存在；请先执行 dytes init 或在应用目录运行
+```
+
+同一目录改用绝对路径 `--dir <abs>/app` 可通过清单检查（继续报“离线安装需要显式版本”）。
+
+### 2. 根因
+
+`src/install/cli.rs::run` 先执行 `set_current_dir(&dir)`，随后仍用**原始的相对 `dir`**
+拼接清单路径：
+
+```rust
+let dir = args.dir.clone().unwrap_or(std::env::current_dir()?);
+std::env::set_current_dir(&dir)?;
+...
+let manifest_path = dir.join("dytes.json"); // 相对当前目录，被二次拼接
+```
+
+切到 `app` 后查找 `app/dytes.json`，实际变成 `app/app/dytes.json`。
+
+### 3. 修复方向
+
+- `set_current_dir` 之前把 `dir` 转成绝对路径（`std::fs::canonicalize` 或
+  `current_dir().join(dir)`），后续统一使用绝对路径；
+- 或在切换目录前读取清单，切换只影响依赖安装阶段。
+
+### 4. 备注
+
+- GitHub #23 提到的 `dytes test` 只读 `test-dependency` 已在 0.2.3 修复：
+  `merge_test_dependencies` 把 `test-dependency` 合并进 `dependencies-*` 后下载（I-06）；
+- `dytes init` 默认生成 `exports` 的疑问见 I-10。
+
+---
+
+## I-09 GitHub #24：S3 匿名读取 403 / 缺少凭据导致 update / install / self-update 失效
+
+**发现日期**：2026-11-18（GitHub #24）
+**影响版本**：0.2.3 及所有未内置 S3 凭据的构建（0.2.10 本地构建可复现）
+**严重程度**：P0 —— 所有在线读写链路中断
+**状态**：0.2.11 已改进错误提示；根因（bucket 匿名策略 / 凭证发放）仍待运维确认
+
+### 1. 现象
+
+```text
+读取失败 (尝试 1/3): S3 对象读取失败: app/screen/dytes.json，稍后重试...
+应用自身尚未发布，跳过应用更新: 下载 app/screen/dytes.json 失败
+```
+
+直接请求 S3 返回 403，而同一对象的 CDN 可匿名读取：
+
+```bash
+curl -I https://s3.api.upyun.com/packages/app/screen/dytes.json   # 403 AccessDenied
+curl -I https://packages.funxdata.com/app/screen/dytes.json       # 200
+```
+
+本仓库另有一种复现：本地 `cargo build` 未注入 `UPYUN_*`，`target/release/dytes.exe`
+读取 `core/dytes/dytes.json` 同样失败；同版本的发布二进制（内置凭据）正常。
+
+### 2. 原因
+
+1. 运行时凭证为空：用户配置、`DYTES_S3_*` 环境变量、构建内置值都没有 AK/SK；
+2. 又拍云 bucket 不再允许匿名读取，空凭证请求被拒绝；
+3. 读取失败被统一压成 `S3 对象读取失败` / `service error`，无法区分无权限与对象不存在；
+4. `src/update/loader.rs` 对这类错误仍会重试 3 次，日志容易误导。
+
+### 3. 修复
+
+- **0.2.11（已发布）**：`src/utils/s3.rs` 新增 `ensure_credentials()`；
+  `fetch_text` / `download_file` / `list_keys` / `download_from_s3` 在发起请求前检查，
+  缺凭证时立即返回可操作提示（配置命令 + 环境变量 + 构建期变量），不再盲目重试；
+- **待运维**：确认又拍云 bucket 的匿名读取策略，或为客户端发放可读凭证；
+- **本地开发**：设置 `DYTES_S3_ACCESS_KEY` / `DYTES_S3_SECRET_KEY`，或在构建时提供
+  `UPYUN_API_KEY` / `UPYUN_API_SECRET`。
+
+### 4. 验证
+
+- 0.2.11 本地构建：错误信息变为明确的“S3 凭证未配置”提示；
+- 带内置凭据的发布版执行 `dytes self-update --check` 可读到 `core/dytes/dytes.json`
+  （发布 0.2.11 后返回 `v0.2.11`）。
+
+---
+
+## I-10 GitHub #27：`dytes init` 生成的清单出现空 `exports`
+
+**发现日期**：2026-11-21（GitHub #27）
+**影响版本**：issue 未注明（报告日期 2026-11-21）
+**严重程度**：P2 —— 不影响运行，但生成内容与预期不符
+**状态**：0.2.11 未复现，待补充复现步骤
+
+### 1. 现象
+
+issue 描述 `dytes init` 生成的 `dytes.json` 中出现 `"exports": {}`，期望为空或省略。
+
+### 2. 0.2.11 核查
+
+对 app / core / sys / web / design_plugins / design_soft / model 七种类型分别执行
+`dytes init`，结果：
+
+- `exports` / `platform-exports` 要么是非空映射，要么完全不出现；
+- `--no-exports` 会省略 `exports` 与 `platform-exports`；
+- 未生成空对象 `{}`。
+
+相关实现：`src/utils/templates.rs::init_manifest`。
+
+### 3. 需要补充
+
+请提供 `dytes init` 的完整命令、包类型、dytes 版本与生成的 `dytes.json`，
+确认是否为旧版本、`--no-exports` 或后续手工编辑导致。
+
+---
+
+## I-11 GitHub #28：`dytes test` 环境需要有可用的 S3 访问
+
+**发现日期**：2026-11-21（GitHub #28）
+**影响版本**：0.2.3 起（依赖改为在线下载）
+**严重程度**：P2 —— 无凭证 / 无网络时测试环境无法建立
+**状态**：符合既有设计，待确认是否补充离线模式
+
+### 1. 说明
+
+0.2.3 起 `dytes test` 会把 `test-dependency` 合并进 `dependencies-*`，
+通过更新引擎把依赖在线下载到 `.dytes/env/`；下载失败立即中止，不回退本地复制（I-06）。
+
+因此测试机必须满足其一：
+
+- 使用带内置凭据的发布构建；
+- 配置 `dytes config set s3.access_key` / `s3.secret_key`；
+- 设置 `DYTES_S3_ACCESS_KEY` / `DYTES_S3_SECRET_KEY`。
+
+本地 `cargo build` 默认不内置凭据，这与 I-09 是同一根因；0.2.11 已在读取/下载前
+给出明确提示。
+
+### 2. 待办
+
+- `docs/commands/test.md` 与 `skills/testenv.md` 已写明在线下载，可再补充“需凭证”的显式提示；
+- 评估是否提供离线模式（当前设计明确不支持）。
+
+---
+
+## I-12 GitHub #29 / #30：`dytes install` 不能执行 / 不能安装应用
+
+**发现日期**：2026-11-21 / 2026-11-22（GitHub #29、#30）
+**严重程度**：待定
+**状态**：待复现；部分疑为用法与 README 不一致
+
+### 1. 现象
+
+两个 issue 只有标题，没有命令、报错和日志：
+
+- #29 `dytes install` 不能执行；
+- #30 `dytes install` 不能安装应用。
+
+### 2. 已知实现（0.2.11）
+
+- `dytes install` 必须给出包类型：`dytes install sys chatllm`，否则报
+  `请指定包类型`；
+- **app 不由 `install` 安装**：代码明确返回
+  `安装应用请使用 dytes update --auto（当前目录的 dytes.json 即应用清单）`；
+- 只有 `--gui` 分支允许省略类型（`dytes install --gui --dir <dir>`）；
+- README 的快速开始仍写 `dytes install --gui --dir D:\Piksel`，与命令行行为不一致，
+  容易让用户误以为 `install` 可以直接安装应用。
+
+### 3. 待办
+
+- 请补充实际命令与完整错误输出，确认是否为 I-08 的相对 `--dir` 问题、I-09 的凭证问题，
+  或仅仅是命令用法；
+- 统一 README / `docs/commands/install.md` 中“安装应用”的入口说明（`update --auto`）。
+
 

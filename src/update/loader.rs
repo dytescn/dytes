@@ -48,6 +48,15 @@ fn fetch_retries() -> u32 {
 /// 用于 dytes.json / packages.json 这类小配置，避免为了读一个 JSON
 /// 先落盘到临时目录再读出来。
 pub async fn fetch_text(path_or_url: &str) -> Result<String> {
+    if is_s3_path(path_or_url) {
+        if let Err(hint) = s3::ensure_credentials() {
+            return Err(anyhow!(
+                "读取 {} 失败: S3 对象读取失败（{hint}）",
+                path_or_url
+            ));
+        }
+    }
+
     let mut last_error = String::new();
     let retries = fetch_retries();
 
@@ -115,6 +124,7 @@ async fn fetch_http_text(url: &str) -> Result<String> {
 
 /// 列出 S3 指定前缀下的对象 key
 pub async fn list_keys(prefix: &str) -> Result<Vec<String>, String> {
+    s3::ensure_credentials()?;
     let client = s3::client().await;
     let mut keys = Vec::new();
     let mut continuation: Option<String> = None;
@@ -152,6 +162,13 @@ pub async fn list_keys(prefix: &str) -> Result<Vec<String>, String> {
 /// 下载文件（公共入口，自动识别 S3 或 HTTP，并带有重试）
 pub async fn download_file(url_or_path: &str, output_dir: &str) -> bool {
     let is_s3 = is_s3_path(url_or_path);
+
+    if is_s3 {
+        if let Err(hint) = s3::ensure_credentials() {
+            eprintln!("  下载最终失败: S3 下载失败: {url_or_path}（{hint}）");
+            return false;
+        }
+    }
 
     const MAX_RETRIES: u32 = 10;
     let max_retries = if startup_mode() { 2 } else { MAX_RETRIES };
@@ -207,6 +224,7 @@ fn is_retryable_error(e: &anyhow::Error) -> bool {
 async fn download_from_s3(object_name: &str, output_dir: &str) -> Result<()> {
     println!("  从 S3 下载: {}", object_name);
 
+    s3::ensure_credentials().map_err(|hint| anyhow!("S3 下载失败: {object_name}（{hint}）"))?;
     let client = s3::client().await;
 
     let head = client

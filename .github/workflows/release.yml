@@ -325,18 +325,6 @@ jobs:
           done
 
       - name: Publish latest alias
-        if: runner.os != 'macOS'
-        uses: shallwefootball/s3-upload-action@master
-        with:
-          aws_key_id: ${{ secrets.UPYUN_API_KEY }}
-          aws_secret_access_key: ${{ secrets.UPYUN_API_SECRET }}
-          aws_bucket: ${{ secrets.UPYUN_BUCKET }}
-          source_dir: upload
-          destination_dir: core/dytes/latest/${{ matrix.platform }}
-          endpoint: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
-
-      - name: Publish latest alias (macOS)
-        if: runner.os == 'macOS'
         shell: bash
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.UPYUN_API_KEY }}
@@ -348,29 +336,15 @@ jobs:
         run: |
           set -euo pipefail
           aws configure set default.s3.addressing_style path
+          # 所有平台统一走 aws cli，并给 latest 下的每个对象（含 .sha256）
+          # 设置短缓存，避免 CDN 长时间返回旧产物。
           for file in upload/*; do
-            aws s3 cp "$file" "s3://$UPYUN_BUCKET/core/dytes/latest/$PLATFORM/$(basename "$file")" \
-              --endpoint-url "$UPYUN_ENDPOINT"
+            name=$(basename "$file")
+            aws s3 cp "$file" "s3://$UPYUN_BUCKET/core/dytes/latest/$PLATFORM/$name" \
+              --endpoint-url "$UPYUN_ENDPOINT" \
+              --cache-control "no-cache, max-age=60"
           done
-
-      - name: Set short cache TTL on latest alias
-        continue-on-error: true
-        shell: bash
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.UPYUN_API_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.UPYUN_API_SECRET }}
-          AWS_DEFAULT_REGION: us-east-1
-          UPYUN_BUCKET: ${{ secrets.UPYUN_BUCKET }}
-          UPYUN_ENDPOINT: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
-          PLATFORM: ${{ matrix.platform }}
-          BINARY: ${{ matrix.package }}
-        run: |
-          set -euo pipefail
-          aws configure set default.s3.addressing_style path
-          aws s3 cp "upload/$BINARY" "s3://$UPYUN_BUCKET/core/dytes/latest/$PLATFORM/$BINARY" \
-            --endpoint-url "$UPYUN_ENDPOINT" \
-            --cache-control "no-cache, max-age=60"
-          echo "已为 latest/$PLATFORM/$BINARY 设置短缓存"
+          echo "已上传 latest/$PLATFORM（含 .sha256，短缓存）"
 
   build-action:
     name: Build action (Linux, no GUI)
@@ -472,40 +446,7 @@ jobs:
           "
           ls -l upload-manifest upload-latest
 
-      - name: Upload manifest to UpYun S3
-        uses: shallwefootball/s3-upload-action@master
-        with:
-          aws_key_id: ${{ secrets.UPYUN_API_KEY }}
-          aws_secret_access_key: ${{ secrets.UPYUN_API_SECRET }}
-          aws_bucket: ${{ secrets.UPYUN_BUCKET }}
-          source_dir: upload-manifest
-          destination_dir: core/dytes
-          endpoint: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
-
-      # verify-release 会检查 core/dytes/<version>/dytes.json；
-      # 仅上传未版本化清单会导致 0.1.14 / 0.1.15 的自检 404。
-      - name: Upload versioned manifest to UpYun S3
-        uses: shallwefootball/s3-upload-action@master
-        with:
-          aws_key_id: ${{ secrets.UPYUN_API_KEY }}
-          aws_secret_access_key: ${{ secrets.UPYUN_API_SECRET }}
-          aws_bucket: ${{ secrets.UPYUN_BUCKET }}
-          source_dir: upload-manifest
-          destination_dir: core/dytes/${{ steps.version.outputs.version }}
-          endpoint: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
-
-      - name: Upload website version script to UpYun S3
-        uses: shallwefootball/s3-upload-action@master
-        with:
-          aws_key_id: ${{ secrets.UPYUN_API_KEY }}
-          aws_secret_access_key: ${{ secrets.UPYUN_API_SECRET }}
-          aws_bucket: ${{ secrets.UPYUN_BUCKET }}
-          source_dir: upload-latest
-          destination_dir: core/dytes/latest
-          endpoint: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
-
-      - name: Set short cache TTL on manifest and version script
-        continue-on-error: true
+      - name: Upload manifests to UpYun S3
         shell: bash
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.UPYUN_API_KEY }}
@@ -513,11 +454,20 @@ jobs:
           AWS_DEFAULT_REGION: us-east-1
           UPYUN_BUCKET: ${{ secrets.UPYUN_BUCKET }}
           UPYUN_ENDPOINT: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           aws configure set default.s3.addressing_style path
+          # 未版本化清单与 version.js 使用短缓存；verify-release 会检查其内容。
           aws s3 cp upload-manifest/dytes.json \
             "s3://$UPYUN_BUCKET/core/dytes/dytes.json" \
+            --endpoint-url "$UPYUN_ENDPOINT" \
+            --content-type "application/json" \
+            --cache-control "no-cache, max-age=60"
+          # verify-release 会检查 core/dytes/<version>/dytes.json；
+          # 仅上传未版本化清单会导致 0.1.14 / 0.1.15 的自检 404。
+          aws s3 cp upload-manifest/dytes.json \
+            "s3://$UPYUN_BUCKET/core/dytes/$VERSION/dytes.json" \
             --endpoint-url "$UPYUN_ENDPOINT" \
             --content-type "application/json" \
             --cache-control "no-cache, max-age=60"
@@ -526,7 +476,52 @@ jobs:
             --endpoint-url "$UPYUN_ENDPOINT" \
             --content-type "application/javascript" \
             --cache-control "no-cache, max-age=60"
-          echo "已为 dytes.json 与 version.js 设置短缓存"
+          echo "清单与 version.js 已上传（短缓存）"
+
+  purge-cache:
+    name: Purge CDN cache
+    needs:
+      - publish-manifest
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Purge unversioned paths
+        shell: bash
+        env:
+          UPYUN_API_KEY: ${{ secrets.UPYUN_API_KEY }}
+          UPYUN_API_SECRET: ${{ secrets.UPYUN_API_SECRET }}
+          UPYUN_BUCKET: ${{ secrets.UPYUN_BUCKET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${UPYUN_API_KEY:-}" ] || [ -z "${UPYUN_API_SECRET:-}" ]; then
+            echo "::warning::缺少 UPYUN_API_KEY / UPYUN_API_SECRET，跳过 CDN 刷新"
+            exit 0
+          fi
+          # 又拍云缓存刷新：未版本化清单与 latest 别名会被 CDN 缓存 8 天，
+          # 仅覆盖同名对象不会让 CDN 立即回源，必须显式刷新。
+          urls=$(printf '%s\n' \
+            "http://packages.funxdata.com/core/dytes/dytes.json" \
+            "http://packages.funxdata.com/core/dytes/latest/version.js" \
+            "http://packages.funxdata.com/core/dytes/latest/windows/dytes.exe" \
+            "http://packages.funxdata.com/core/dytes/latest/windows/dytes.exe.sha256" \
+            "http://packages.funxdata.com/core/dytes/latest/linux/dytes.bin" \
+            "http://packages.funxdata.com/core/dytes/latest/linux/dytes.bin.sha256" \
+            "http://packages.funxdata.com/core/dytes/latest/macos/dytes.app" \
+            "http://packages.funxdata.com/core/dytes/latest/macos/dytes.app.sha256")
+          date_str=$(date -u '+%a, %d %b %Y %H:%M:%S GMT')
+          password_md5=$(printf '%s' "$UPYUN_API_SECRET" | md5sum | awk '{print $1}')
+          sign=$(printf '%s&%s&%s&%s' "$urls" "$UPYUN_BUCKET" "$date_str" "$password_md5" | md5sum | awk '{print $1}')
+          auth="UpYun ${UPYUN_BUCKET}:${UPYUN_API_KEY}:${sign}"
+          code=$(curl -sS --max-time 30 -o purge-response.json -w '%{http_code}' \
+            -X POST "http://purge.upyun.com/purge/" \
+            -H "Authorization: $auth" -H "Date: $date_str" \
+            --form-string "purge=$urls") || code="000"
+          echo "CDN 刷新 HTTP $code"
+          cat purge-response.json 2>/dev/null || true
+          if [ "$code" != "200" ]; then
+            echo "::error::CDN 刷新失败（HTTP $code）。请确认 UPYUN_API_KEY / UPYUN_API_SECRET 是又拍云操作员凭证，或到控制台手动刷新。"
+            exit 1
+          fi
 
   github-release:
     name: Publish GitHub Release
@@ -564,6 +559,7 @@ jobs:
     needs:
       - preflight
       - publish-manifest
+      - purge-cache
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -586,7 +582,8 @@ jobs:
             local url="$1"
             local attempt code
             for attempt in $(seq 1 20); do
-              code=$(curl -sS -L -o /dev/null -w '%{http_code}' --max-time 20 "$url" || true)
+              code=$(curl -sS -L --retry 3 --retry-all-errors --retry-delay 2 \
+                -o /dev/null -w '%{http_code}' --max-time 20 "$url" || true)
               if [ "$code" = "200" ]; then
                 echo "OK $url"
                 return 0
@@ -611,6 +608,33 @@ jobs:
 
           echo "检查版本化清单..."
           check_status "$base/$version/dytes.json?t=$(date +%s)"
+
+          echo "检查 latest 内容与版本化产物一致..."
+          for platform in windows linux macos; do
+            case "$platform" in
+              windows) file="dytes.exe" ;;
+              linux) file="dytes.bin" ;;
+              macos) file="dytes.app" ;;
+            esac
+            latest_sum=""
+            version_sum=""
+            for attempt in $(seq 1 20); do
+              latest_sum=$(curl -fsSL --max-time 20 "$base/latest/$platform/$file.sha256?t=$(date +%s)" \
+                | awk '{print $1}' || true)
+              version_sum=$(curl -fsSL --max-time 20 "$base/$version/$platform/$file.sha256?t=$(date +%s)" \
+                | awk '{print $1}' || true)
+              if [ -n "$latest_sum" ] && [ "$latest_sum" = "$version_sum" ]; then
+                break
+              fi
+              echo "等待 latest/$platform/$file 刷新 ($attempt/20)"
+              sleep 15
+            done
+            if [ -z "$latest_sum" ] || [ "$latest_sum" != "$version_sum" ]; then
+              echo "::error::latest/$platform/$file 仍是旧版本（latest=${latest_sum:-空}, version=${version_sum:-空}）；CDN 缓存未刷新。"
+              exit 1
+            fi
+            echo "OK latest/$platform/$file -> $latest_sum"
+          done
 
           echo "检查 dytes.json 内容..."
           manifest_ok=false

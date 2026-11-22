@@ -1,7 +1,7 @@
 # dytes 已知问题
 
 > 记录实际使用中遇到的阻塞问题、复现方式与修复方向。
-> 最近更新：2026-11-22（同步 GitHub #23 / #24 / #27 / #28 / #29 / #30；记录 I-13）
+> 最近更新：2026-11-22（同步 GitHub #23 / #24 / #27 / #28 / #29 / #30；记录 I-13、I-14）
 
 ---
 
@@ -673,3 +673,60 @@ issue 描述 `dytes init` 生成的 `dytes.json` 中出现 `"exports": {}`，期
   `app/dytes.json` → `dependencies-core.chatbot = "0.1.2"`，原有 `cyctron` 保留。
 
 
+
+---
+
+## I-14 发布后 `latest` 别名与未版本化清单仍返回旧版本（CDN 缓存）
+
+**发现日期**：2026-11-22
+**影响版本**：0.2.13 及更早的发布流程
+**严重程度**：P0 —— 安装脚本 / 官网从 `latest` 下载到旧版，表现像“打包失败”
+**状态**：0.2.14 修复发布 workflow
+
+### 1. 现象
+
+`0.2.13` 的 GitHub Release 与版本化对象均正常，但：
+
+```bash
+curl -I https://packages.funxdata.com/core/dytes/latest/windows/dytes.exe
+# Last-Modified: 2026-11-14；Content-Length 与 0.2.13 产物不一致
+
+curl https://packages.funxdata.com/core/dytes/latest/version.js
+# {"version":"0.2.10"}
+```
+
+`Verify published files` job 失败，run 的 annotation 为
+`Process completed with exit code 35`（curl SSL connect error）；官网与安装脚本
+则继续拿到旧版 `latest`。
+
+### 2. 原因
+
+1. 未版本化路径（`latest/*`、`core/dytes/dytes.json`）的 CDN 缓存为
+   `Cache-Control: max-age=691200`（8 天）；覆盖同名 S3 对象不会让又拍云 CDN
+   立即回源；
+2. Windows / Linux 的 `latest` 上传使用第三方 action，未统一设置短缓存；
+   `.sha256` 也没有设置；
+3. `verify-release` 只检查 HTTP 200，不比较 `latest` 与版本化产物的内容，
+   旧缓存也能通过；
+4. `curl` 没有 `--retry-all-errors`，CDN 偶发 TLS 35 会让 job 直接失败。
+
+### 3. 修复（0.2.14 workflow）
+
+- `latest` 别名三平台统一改用 `aws s3 cp`，二进制与 `.sha256` 均设置
+  `Cache-Control: no-cache, max-age=60`；
+- 未版本化 `dytes.json`、`version.js` 也用 `aws s3 cp` 上传并设置短缓存；
+- 新增 `purge-cache` job，调用又拍云缓存刷新 API
+  （`http://purge.upyun.com/purge/`，Operation 凭证复用
+  `UPYUN_API_KEY` / `UPYUN_API_SECRET` / `UPYUN_BUCKET`），刷新
+  `dytes.json`、`version.js` 与三平台 `latest` 产物；
+- `verify-release` 增加 `latest` 与 `<version>` 的 `.sha256` 一致性校验，
+  并给 `curl` 增加 `--retry 3 --retry-all-errors`。
+
+### 4. 验证
+
+- 发布 0.2.14 后检查：
+  - `latest/<platform>/<file>.sha256` 与 `<version>/<platform>/<file>.sha256` 相同；
+  - `latest/version.js` 返回 0.2.14；
+  - `verify-release` 通过。
+- 若 `purge-cache` 返回 401（操作员凭证不匹配），需在又拍云控制台手动刷新，
+  或改用具备刷新权限的操作员配置 secrets。

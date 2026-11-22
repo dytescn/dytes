@@ -738,3 +738,7 @@ curl https://packages.funxdata.com/core/dytes/latest/version.js
   `latest/linux` 与 `latest/macos` 仍是旧内容，`verify-release` 按内容校验失败；
   0.2.16 改为同时提交 `http://` 与 `https://` 两批 URL，并把 purge 响应写入
   job notice，便于确认是否返回 `invalid_domain_of_url`。
+- 0.2.16 的 `purge-cache` 实际未执行：该 job 没有声明
+  `environment: product`，读不到定义在 environment 中的
+  `UPYUN_API_KEY` / `UPYUN_API_SECRET`，只打印了“跳过 CDN 刷新”；
+  0.2.17 补上 environment 后重新发布。

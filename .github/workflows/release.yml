@@ -506,6 +506,9 @@ jobs:
       - publish-manifest
       - build
     runs-on: ubuntu-latest
+    # UPYUN_API_KEY / UPYUN_API_SECRET 定义在 environment `product`，
+    # 未声明 environment 时 secrets 为空，会静默跳过刷新。
+    environment: product
     steps:
       - name: Purge unversioned paths
         shell: bash

@@ -521,29 +521,52 @@ jobs:
           fi
           # 又拍云缓存刷新：未版本化清单与 latest 别名会被 CDN 缓存 8 天，
           # 仅覆盖同名对象不会让 CDN 立即回源，必须显式刷新。
-          urls=$(printf '%s\n' \
-            "http://packages.funxdata.com/core/dytes/dytes.json" \
-            "http://packages.funxdata.com/core/dytes/latest/version.js" \
-            "http://packages.funxdata.com/core/dytes/latest/windows/dytes.exe" \
-            "http://packages.funxdata.com/core/dytes/latest/windows/dytes.exe.sha256" \
-            "http://packages.funxdata.com/core/dytes/latest/linux/dytes.bin" \
-            "http://packages.funxdata.com/core/dytes/latest/linux/dytes.bin.sha256" \
-            "http://packages.funxdata.com/core/dytes/latest/macos/dytes.app" \
-            "http://packages.funxdata.com/core/dytes/latest/macos/dytes.app.sha256")
-          date_str=$(date -u '+%a, %d %b %Y %H:%M:%S GMT')
+          # 同时提交 http / https，兼容 CDN 的缓存键差异。
+          paths=(
+            "core/dytes/dytes.json"
+            "core/dytes/latest/version.js"
+            "core/dytes/latest/windows/dytes.exe"
+            "core/dytes/latest/windows/dytes.exe.sha256"
+            "core/dytes/latest/linux/dytes.bin"
+            "core/dytes/latest/linux/dytes.bin.sha256"
+            "core/dytes/latest/macos/dytes.app"
+            "core/dytes/latest/macos/dytes.app.sha256"
+          )
           password_md5=$(printf '%s' "$UPYUN_API_SECRET" | md5sum | awk '{print $1}')
-          sign=$(printf '%s&%s&%s&%s' "$urls" "$UPYUN_BUCKET" "$date_str" "$password_md5" | md5sum | awk '{print $1}')
-          auth="UpYun ${UPYUN_BUCKET}:${UPYUN_API_KEY}:${sign}"
-          code=$(curl -sS --max-time 30 -o purge-response.json -w '%{http_code}' \
-            -X POST "http://purge.upyun.com/purge/" \
-            -H "Authorization: $auth" -H "Date: $date_str" \
-            --form-string "purge=$urls") || code="000"
-          echo "CDN 刷新 HTTP $code"
-          cat purge-response.json 2>/dev/null || true
-          if [ "$code" != "200" ]; then
-            echo "::error::CDN 刷新失败（HTTP $code）。请确认 UPYUN_API_KEY / UPYUN_API_SECRET 是又拍云操作员凭证，或到控制台手动刷新。"
-            exit 1
-          fi
+          purge_batch() {
+            local scheme="$1"
+            local urls=""
+            for path in "${paths[@]}"; do
+              urls+="${scheme}://packages.funxdata.com/${path}"$'\n'
+            done
+            urls=${urls%$'\n'}
+            local date_str
+            date_str=$(date -u '+%a, %d %b %Y %H:%M:%S GMT')
+            local sign
+            sign=$(printf '%s&%s&%s&%s' "$urls" "$UPYUN_BUCKET" "$date_str" "$password_md5" | md5sum | awk '{print $1}')
+            local auth="UpYun ${UPYUN_BUCKET}:${UPYUN_API_KEY}:${sign}"
+            local code
+            code=$(curl -sS --max-time 30 -o "purge-response-${scheme}.json" -w '%{http_code}' \
+              -X POST "http://purge.upyun.com/purge/" \
+              -H "Authorization: $auth" -H "Date: $date_str" \
+              --form-string "purge=$urls") || code="000"
+            local body
+            body=$(cat "purge-response-${scheme}.json" 2>/dev/null || true)
+            echo "CDN 刷新（$scheme）HTTP $code: $body"
+            echo "::notice::CDN purge $scheme -> $code $body"
+            if [ "$code" != "200" ]; then
+              echo "::error::CDN 刷新失败（$scheme，HTTP $code）：$body"
+              return 1
+            fi
+            if printf '%s' "$body" | grep -q 'invalid_domain_of_url'; then
+              echo "::warning::CDN 刷新返回无效域名列表：$body"
+            fi
+            return 0
+          }
+          status=0
+          purge_batch http || status=1
+          purge_batch https || status=1
+          exit "$status"
 
   github-release:
     name: Publish GitHub Release

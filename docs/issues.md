@@ -734,3 +734,7 @@ curl https://packages.funxdata.com/core/dytes/latest/version.js
 - 0.2.14 发布时 macOS 的 `latest` 上传失败（`aws s3 cp --cache-control` 在
   macOS runner 上退出 1），已改为 macOS 保留原上传命令、缓存刷新交给
   `purge-cache`；0.2.15 重新发布。
+- 0.2.15 发布时 `purge-cache` 返回 200，但 `latest/windows` 已更新、
+  `latest/linux` 与 `latest/macos` 仍是旧内容，`verify-release` 按内容校验失败；
+  0.2.16 改为同时提交 `http://` 与 `https://` 两批 URL，并把 purge 响应写入
+  job notice，便于确认是否返回 `invalid_domain_of_url`。

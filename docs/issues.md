@@ -1,7 +1,7 @@
 # dytes 已知问题
 
 > 记录实际使用中遇到的阻塞问题、复现方式与修复方向。
-> 最近更新：2026-11-22（同步 GitHub #23 / #24 / #27 / #28 / #29 / #30）
+> 最近更新：2026-11-22（同步 GitHub #23 / #24 / #27 / #28 / #29 / #30；记录 I-13）
 
 ---
 
@@ -630,5 +630,46 @@ issue 描述 `dytes init` 生成的 `dytes.json` 中出现 `"exports": {}`，期
 - 请补充实际命令与完整错误输出，确认是否为 I-08 的相对 `--dir` 问题、I-09 的凭证问题，
   或仅仅是命令用法；
 - 统一 README / `docs/commands/install.md` 中“安装应用”的入口说明（`update --auto`）。
+
+---
+
+## I-13 `dytes install` 未把新增依赖写入应用根 `dytes.json`
+
+**发现日期**：2026-11-22
+**影响版本**：0.2.12 及更早
+**严重程度**：P1 —— 包已安装，但应用清单缺少声明，后续 `update` / 迁移无法复现
+**状态**：0.2.13 已修复
+
+### 1. 现象
+
+执行 `dytes install core chatbot` 时，文件安装成功，但应用根 `dytes.json` 的
+`dependencies-core` 没有新增 `chatbot`；已有 `dependencies-core` 时也没有更新版本。
+
+### 2. 原因
+
+`install` 只用 `--dir`（默认当前目录）定位清单，而更新引擎使用
+`get_app_dir()`：它优先 `DYTES_APP_DIR`。当宿主 / 启动器设置了
+`DYTES_APP_DIR`、或当前目录不是应用根时：
+
+- 文件被安装到 `get_app_dir()`；
+- 清单却写到当前目录（或直接报不存在），造成“安装了但清单没变”。
+
+### 3. 修复（0.2.13）
+
+1. 应用根解析改为：`--dir` 优先，否则使用 `get_app_dir()`（支持 `DYTES_APP_DIR`）；
+2. `set_current_dir` 后固定 `DYTES_APP_DIR`，保证文件安装与清单写入使用同一个根；
+3. 新增 `upsert_dependency`：
+   - 已存在同名依赖 → 更新为本次解析出的版本（未显式指定时即线上最新）；
+   - 不存在 → 新增到对应 `dependencies-*`；
+4. 输出中打印实际写入的清单路径与分组。
+
+### 4. 验证
+
+- 单元测试：`upsert_dependency_adds_new_entry`、
+  `upsert_dependency_updates_existing_entry`、`upsert_dependency_rejects_non_object_group`；
+- 集成测试：`install_sys_uses_app_dir_manifest`（`DYTES_APP_DIR` 与当前目录不同）；
+- 手工验证：当前目录为空、`DYTES_APP_DIR` 指向应用目录时，执行
+  `dytes install core chatbot@0.1.2 --offline` 写入
+  `app/dytes.json` → `dependencies-core.chatbot = "0.1.2"`，原有 `cyctron` 保留。
 
 

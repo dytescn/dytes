@@ -75,6 +75,22 @@ fn install_sys_relative_dir_resolves_manifest() {
     assert!(stderr(&out).contains("离线安装需要显式版本"));
 }
 
+#[test]
+fn install_sys_uses_app_dir_manifest() {
+    let env = TestEnv::new();
+    env.write_json("app/dytes.json", &app_manifest());
+
+    // 未传 --dir 时，清单与应用根都应以 DYTES_APP_DIR 为准。
+    let out = env
+        .command()
+        .env("DYTES_APP_DIR", env.root().join("app"))
+        .args(["install", "sys", "info_lib", "--offline"])
+        .output()
+        .expect("启动 dytes 失败");
+    assert_code(&out, 2);
+    assert!(stderr(&out).contains("离线安装需要显式版本"));
+}
+
 #[cfg(not(feature = "gui"))]
 #[test]
 fn install_gui_reports_missing_feature() {

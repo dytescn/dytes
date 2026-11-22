@@ -52,12 +52,19 @@ pub fn run(args: InstallArgs) -> Result<()> {
         }
     }
 
-    let dir = args.dir.clone().unwrap_or(std::env::current_dir()?);
-    std::env::set_current_dir(&dir)
+    // 应用根：`--dir` 明确指定时以其为准；否则与更新引擎使用同一个根
+    // （支持 `DYTES_APP_DIR`，没有时回退当前目录）。
+    let requested_dir = match &args.dir {
+        Some(dir) => dir.clone(),
+        None => PathBuf::from(crate::update::env::get_app_dir()),
+    };
+    std::env::set_current_dir(&requested_dir)
         .map_err(|e| DytesError::failed(format!("切换目录失败: {e}")))?;
     // `--dir` 可能是相对路径；切换后再取一次绝对路径，避免后续拼接
     // `dytes.json` 时把 `app` 又拼成 `app/app`。
     let dir = std::env::current_dir()?;
+    // 固定应用根，确保清单写入位置与文件安装位置一致。
+    std::env::set_var("DYTES_APP_DIR", &dir);
 
     let pkg_type = args.pkg_type.as_deref().ok_or_else(|| {
         DytesError::args("请指定包类型，例如：dytes install plugin cdr_check_txt")
@@ -130,6 +137,29 @@ async fn fetch_dependency_version(
         .ok_or_else(|| anyhow::anyhow!("{path} 缺少 version"))
 }
 
+/// 把 `name@version` 写入清单的 `key` 分组：已有同名条目则更新，没有则新增。
+fn upsert_dependency(
+    manifest: &mut serde_json::Value,
+    key: &str,
+    name: &str,
+    version: &str,
+) -> Result<()> {
+    let object = manifest
+        .as_object_mut()
+        .ok_or_else(|| DytesError::config("dytes.json 不是 JSON 对象"))?;
+    let entry = object
+        .entry(key.to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    let deps = entry
+        .as_object_mut()
+        .ok_or_else(|| DytesError::config(format!("{key} 不是对象")))?;
+    deps.insert(
+        name.to_string(),
+        serde_json::Value::String(version.to_string()),
+    );
+    Ok(())
+}
+
 /// 安装 sys / core / web / model 依赖：写入当前清单后执行 update。
 fn install_dependency(
     dir: &Path,
@@ -152,9 +182,6 @@ fn install_dependency(
         .map_err(|e| DytesError::config(format!("读取 {} 失败: {e}", manifest_path.display())))?;
     let mut value: serde_json::Value = serde_json::from_str(&text)
         .map_err(|e| DytesError::config(format!("解析 dytes.json 失败: {e}")))?;
-    let object = value
-        .as_object_mut()
-        .ok_or_else(|| DytesError::config("dytes.json 不是 JSON 对象"))?;
 
     let version = match version {
         Some(version) => version.to_string(),
@@ -172,17 +199,18 @@ fn install_dependency(
         }
     };
 
-    let entry = object
-        .entry(key.to_string())
-        .or_insert_with(|| serde_json::json!({}));
-    let deps = entry
-        .as_object_mut()
-        .ok_or_else(|| DytesError::config(format!("{key} 不是对象")))?;
-    deps.insert(name.to_string(), serde_json::Value::String(version.clone()));
+    // 已有同名依赖则更新到本次解析出的版本，没有则新增。
+    upsert_dependency(&mut value, key, name, &version)?;
     fs::write(&manifest_path, serde_json::to_string_pretty(&value)?)
         .map_err(|e| DytesError::config(format!("写入 {} 失败: {e}", manifest_path.display())))?;
 
-    println!("已写入 {}: {}@{}；开始安装目标包", key, name, version);
+    println!(
+        "已写入 {}（{}）: {}@{}；开始安装目标包",
+        manifest_path.display(),
+        key,
+        name,
+        version
+    );
 
     let runtime = tokio::runtime::Runtime::new()
         .map_err(|e| DytesError::failed(format!("创建异步运行时失败: {e}")))?;
@@ -207,4 +235,41 @@ fn install_dependency(
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn upsert_dependency_adds_new_entry() {
+        let mut manifest = json!({
+            "name": "demo",
+            "version": "0.1.0",
+            "type": "app"
+        });
+        upsert_dependency(&mut manifest, "dependencies-core", "chatbot", "0.1.2").unwrap();
+        assert_eq!(manifest["dependencies-core"]["chatbot"], "0.1.2");
+        assert_eq!(manifest["dependencies-core"].as_object().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn upsert_dependency_updates_existing_entry() {
+        let mut manifest = json!({
+            "dependencies-core": {
+                "chatbot": "0.1.0",
+                "cyctron": "1.0.18"
+            }
+        });
+        upsert_dependency(&mut manifest, "dependencies-core", "chatbot", "0.1.2").unwrap();
+        assert_eq!(manifest["dependencies-core"]["chatbot"], "0.1.2");
+        assert_eq!(manifest["dependencies-core"]["cyctron"], "1.0.18");
+    }
+
+    #[test]
+    fn upsert_dependency_rejects_non_object_group() {
+        let mut manifest = json!({ "dependencies-core": null });
+        assert!(upsert_dependency(&mut manifest, "dependencies-core", "chatbot", "0.1.2").is_err());
+    }
 }

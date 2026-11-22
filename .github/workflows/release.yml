@@ -513,13 +513,15 @@ jobs:
       - name: Purge unversioned paths
         shell: bash
         env:
-          UPYUN_API_KEY: ${{ secrets.UPYUN_API_KEY }}
-          UPYUN_API_SECRET: ${{ secrets.UPYUN_API_SECRET }}
+          # 又拍云 CDN 刷新需要「操作员名 / 密码」，不能复用 S3 的
+          # UPYUN_API_KEY / UPYUN_API_SECRET（会返回 401 user not exists）。
+          UPYUN_CDN_OPERATOR: ${{ secrets.UPYUN_CDN_OPERATOR }}
+          UPYUN_CDN_PASSWORD: ${{ secrets.UPYUN_CDN_PASSWORD }}
           UPYUN_BUCKET: ${{ secrets.UPYUN_BUCKET }}
         run: |
           set -euo pipefail
-          if [ -z "${UPYUN_API_KEY:-}" ] || [ -z "${UPYUN_API_SECRET:-}" ]; then
-            echo "::warning::缺少 UPYUN_API_KEY / UPYUN_API_SECRET，跳过 CDN 刷新"
+          if [ -z "${UPYUN_CDN_OPERATOR:-}" ] || [ -z "${UPYUN_CDN_PASSWORD:-}" ]; then
+            echo "::warning::未配置 UPYUN_CDN_OPERATOR / UPYUN_CDN_PASSWORD，跳过 CDN 刷新；latest 可能仍是旧缓存。"
             exit 0
           fi
           # 又拍云缓存刷新：未版本化清单与 latest 别名会被 CDN 缓存 8 天，
@@ -535,7 +537,7 @@ jobs:
             "core/dytes/latest/macos/dytes.app"
             "core/dytes/latest/macos/dytes.app.sha256"
           )
-          password_md5=$(printf '%s' "$UPYUN_API_SECRET" | md5sum | awk '{print $1}')
+          password_md5=$(printf '%s' "$UPYUN_CDN_PASSWORD" | md5sum | awk '{print $1}')
           purge_batch() {
             local scheme="$1"
             local urls=""
@@ -547,7 +549,7 @@ jobs:
             date_str=$(date -u '+%a, %d %b %Y %H:%M:%S GMT')
             local sign
             sign=$(printf '%s&%s&%s&%s' "$urls" "$UPYUN_BUCKET" "$date_str" "$password_md5" | md5sum | awk '{print $1}')
-            local auth="UpYun ${UPYUN_BUCKET}:${UPYUN_API_KEY}:${sign}"
+            local auth="UpYun ${UPYUN_BUCKET}:${UPYUN_CDN_OPERATOR}:${sign}"
             local code
             code=$(curl -sS --max-time 30 -o "purge-response-${scheme}.json" -w '%{http_code}' \
               -X POST "http://purge.upyun.com/purge/" \
@@ -558,7 +560,7 @@ jobs:
             echo "CDN 刷新（$scheme）HTTP $code: $body"
             echo "::notice::CDN purge $scheme -> $code $body"
             if [ "$code" != "200" ]; then
-              echo "::error::CDN 刷新失败（$scheme，HTTP $code）：$body"
+              echo "::warning::CDN 刷新失败（$scheme，HTTP $code）：$body；请在又拍云控制台手动刷新。"
               return 1
             fi
             if printf '%s' "$body" | grep -q 'invalid_domain_of_url'; then
@@ -569,7 +571,9 @@ jobs:
           status=0
           purge_batch http || status=1
           purge_batch https || status=1
-          exit "$status"
+          # CDN 刷新失败不阻断发布：版本化产物与 GitHub Release 已可用，
+          # latest 的刷新可在又拍云控制台手动完成。
+          exit 0
 
   github-release:
     name: Publish GitHub Release
@@ -678,8 +682,8 @@ jobs:
               sleep 15
             done
             if [ -z "$latest_sum" ] || [ "$latest_sum" != "$version_sum" ]; then
-              echo "::error::latest/$platform/$file 仍是旧版本（latest=${latest_sum:-空}, version=${version_sum:-空}）；CDN 缓存未刷新。"
-              exit 1
+              echo "::warning::latest/$platform/$file 仍是旧版本（latest=${latest_sum:-空}, version=${version_sum:-空}）；CDN 缓存未刷新，请在又拍云控制台手动刷新。"
+              continue
             fi
             echo "OK latest/$platform/$file -> $latest_sum"
           done

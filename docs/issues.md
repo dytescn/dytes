@@ -742,3 +742,12 @@ curl https://packages.funxdata.com/core/dytes/latest/version.js
   `environment: product`，读不到定义在 environment 中的
   `UPYUN_API_KEY` / `UPYUN_API_SECRET`，只打印了“跳过 CDN 刷新”；
   0.2.17 补上 environment 后重新发布。
+- 0.2.17 的 purge 使用 S3 凭证返回 `401 user not exists`：又拍云 CDN 刷新需要
+  「操作员名 / 密码」，与 S3 的 `UPYUN_API_KEY` / `UPYUN_API_SECRET` 不同。
+  0.2.18 改为读取 `UPYUN_CDN_OPERATOR` / `UPYUN_CDN_PASSWORD`；未配置时跳过且
+  不阻断发布，`verify-release` 对 latest 旧缓存只告警。
+- **待办**：在 GitHub environment `product` 配置 `UPYUN_CDN_OPERATOR` /
+  `UPYUN_CDN_PASSWORD`，或在又拍云控制台手动刷新以下 URL：
+  `core/dytes/dytes.json`、`core/dytes/latest/version.js`、
+  `core/dytes/latest/{windows/dytes.exe,linux/dytes.bin,macos/dytes.app}`
+  及其 `.sha256`。

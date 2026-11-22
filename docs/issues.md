@@ -730,3 +730,7 @@ curl https://packages.funxdata.com/core/dytes/latest/version.js
   - `verify-release` 通过。
 - 若 `purge-cache` 返回 401（操作员凭证不匹配），需在又拍云控制台手动刷新，
   或改用具备刷新权限的操作员配置 secrets。
+
+- 0.2.14 发布时 macOS 的 `latest` 上传失败（`aws s3 cp --cache-control` 在
+  macOS runner 上退出 1），已改为 macOS 保留原上传命令、缓存刷新交给
+  `purge-cache`；0.2.15 重新发布。

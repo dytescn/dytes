@@ -325,6 +325,7 @@ jobs:
           done
 
       - name: Publish latest alias
+        if: runner.os != 'macOS'
         shell: bash
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.UPYUN_API_KEY }}
@@ -336,8 +337,8 @@ jobs:
         run: |
           set -euo pipefail
           aws configure set default.s3.addressing_style path
-          # 所有平台统一走 aws cli，并给 latest 下的每个对象（含 .sha256）
-          # 设置短缓存，避免 CDN 长时间返回旧产物。
+          # 给 latest 下的每个对象（含 .sha256）设置短缓存，避免 CDN
+          # 长时间返回旧产物；最终仍由 purge-cache 主动刷新。
           for file in upload/*; do
             name=$(basename "$file")
             aws s3 cp "$file" "s3://$UPYUN_BUCKET/core/dytes/latest/$PLATFORM/$name" \
@@ -345,6 +346,27 @@ jobs:
               --cache-control "no-cache, max-age=60"
           done
           echo "已上传 latest/$PLATFORM（含 .sha256，短缓存）"
+
+      # macOS runner 对 aws cli 的 cache-control 参数处理不稳定，
+      # 保持原有上传命令，缓存刷新交给 purge-cache。
+      - name: Publish latest alias (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.UPYUN_API_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.UPYUN_API_SECRET }}
+          AWS_DEFAULT_REGION: us-east-1
+          UPYUN_BUCKET: ${{ secrets.UPYUN_BUCKET }}
+          UPYUN_ENDPOINT: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          aws configure set default.s3.addressing_style path
+          for file in upload/*; do
+            aws s3 cp "$file" "s3://$UPYUN_BUCKET/core/dytes/latest/$PLATFORM/$(basename "$file")" \
+              --endpoint-url "$UPYUN_ENDPOINT"
+          done
+          echo "已上传 latest/$PLATFORM"
 
   build-action:
     name: Build action (Linux, no GUI)

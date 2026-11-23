@@ -544,7 +544,6 @@ jobs:
             for path in "${paths[@]}"; do
               urls+="${scheme}://packages.funxdata.com/${path}"$'\n'
             done
-            urls=${urls%$'\n'}
             local date_str
             date_str=$(date -u '+%a, %d %b %Y %H:%M:%S GMT')
             local sign
@@ -554,7 +553,8 @@ jobs:
             code=$(curl -sS --max-time 30 -o "purge-response-${scheme}.json" -w '%{http_code}' \
               -X POST "http://purge.upyun.com/purge/" \
               -H "Authorization: $auth" -H "Date: $date_str" \
-              --form-string "purge=$urls") || code="000"
+              -H "Content-Type: application/x-www-form-urlencoded" \
+              --data-urlencode "purge=$urls") || code="000"
             local body
             body=$(cat "purge-response-${scheme}.json" 2>/dev/null || true)
             echo "CDN 刷新（$scheme）HTTP $code: $body"

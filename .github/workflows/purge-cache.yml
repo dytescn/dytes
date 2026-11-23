@@ -28,6 +28,12 @@ jobs:
           UPYUN_BUCKET: ${{ secrets.UPYUN_BUCKET }}
         run: |
           set -euo pipefail
+          # 去掉复制粘贴可能带入的换行与首尾空白。
+          UPYUN_CDN_OPERATOR="$(printf '%s' "$UPYUN_CDN_OPERATOR" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          UPYUN_CDN_PASSWORD="$(printf '%s' "$UPYUN_CDN_PASSWORD" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          echo "CDN operator: ${UPYUN_CDN_OPERATOR} (len=${#UPYUN_CDN_OPERATOR})"
+          echo "CDN password length: ${#UPYUN_CDN_PASSWORD}"
+          echo "UPYUN_BUCKET: ${UPYUN_BUCKET}"
           if [ -z "${UPYUN_CDN_OPERATOR:-}" ] || [ -z "${UPYUN_CDN_PASSWORD:-}" ]; then
             echo "::error::未配置 UPYUN_CDN_OPERATOR / UPYUN_CDN_PASSWORD，无法刷新 CDN。"
             exit 1

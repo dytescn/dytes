@@ -15,7 +15,7 @@ jobs:
   purge-cache:
     name: Purge CDN cache
     runs-on: ubuntu-latest
-    # CDN 刷新凭证定义在 environment `product`。
+    # CDN 刷新凭证定义在 environment `product`（也兼容 repository secrets）。
     environment: product
     steps:
       - name: Purge unversioned paths

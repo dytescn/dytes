@@ -155,6 +155,9 @@ pub fn run_install_gui(install_dir: Option<PathBuf>, launch: bool) -> Result<()>
         });
     });
 
+    // 窗口显示后置顶并居中（kiosk 场景下避免被宿主全屏窗口遮挡）。
+    schedule_window_placement(&ui, |ui| ui.set_pin_top(true));
+
     ui.run().context("运行安装窗口失败")?;
     Ok(())
 }
@@ -165,24 +168,75 @@ fn close_installer(ui: &MainWindow) {
     let _ = slint::quit_event_loop();
 }
 
+/// 窗口显示后置顶并居中。
+///
+/// Slint 在窗口映射前应用 `always-on-top` 会丢失，之后属性不再变化就不会重试；
+/// 因此延迟到事件循环运行、窗口映射后再设置一次。Windows 后端会把
+/// `always-on-top` 映射为 `WS_EX_TOPMOST`。
+fn schedule_window_placement<T>(ui: &T, pin_top: impl FnOnce(&T) + Send + 'static)
+where
+    T: slint::ComponentHandle + 'static,
+{
+    let weak = ui.as_weak();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(ui) = weak.upgrade() {
+                pin_top(&ui);
+                center_window(ui.window());
+            }
+        });
+    });
+}
+
+/// 在 Windows 上把窗口移到主显示器中央。
+///
+/// 其他平台保持交给窗口管理器（Wayland 不支持强制定位）。Windows 在部分
+/// 多屏 / 缩放组合下也可能把窗口放到默认位置之外，这里显式居中。
+fn center_window(window: &slint::Window) {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetSystemMetrics, SM_CXPADDEDBORDER, SM_CXSCREEN, SM_CXSIZEFRAME, SM_CYCAPTION,
+            SM_CYSCREEN, SM_CYSIZEFRAME,
+        };
+
+        let size = window.size();
+        // SAFETY: GetSystemMetrics 仅读取系统指标，不涉及指针或所有权。
+        let (screen_w, screen_h, border_x, border_y, caption) = unsafe {
+            (
+                GetSystemMetrics(SM_CXSCREEN),
+                GetSystemMetrics(SM_CYSCREEN),
+                GetSystemMetrics(SM_CXSIZEFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER),
+                GetSystemMetrics(SM_CYSIZEFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER),
+                GetSystemMetrics(SM_CYCAPTION),
+            )
+        };
+        if screen_w <= 0 || screen_h <= 0 {
+            return;
+        }
+        // `window.size()` 不含标题栏与边框，而 `set_position` 定位的是外框，
+        // 按外框尺寸计算才能视觉居中。
+        let outer_w = size.width as i32 + border_x * 2;
+        let outer_h = size.height as i32 + border_y + caption + border_x;
+        let x = ((screen_w - outer_w) / 2).max(0);
+        let y = ((screen_h - outer_h) / 2).max(0);
+        window.set_position(slint::PhysicalPosition::new(x, y));
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window;
+    }
+}
+
 /// 启动图形更新窗口。
 ///
 /// `dir` 为空时使用当前目录；点击“开始更新”后通过内置更新引擎执行。
 pub fn run_update_gui(dir: Option<PathBuf>) -> Result<()> {
     let ui = UpdatePage::new().context("创建更新窗口失败")?;
 
-    // 窗口显示后再置顶：映射前设置 window level 会被丢弃（见 update.slint 注释）。
-    {
-        let weak = ui.as_weak();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(400));
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(ui) = weak.upgrade() {
-                    ui.set_pin_top(true);
-                }
-            });
-        });
-    }
+    // 窗口显示后置顶并居中：映射前设置 window level 会被丢弃（见 update.slint 注释）。
+    schedule_window_placement(&ui, |ui| ui.set_pin_top(true));
     ui.set_status_text("点击按钮检查并安装更新".into());
 
     // 窗口打开即延后下次更新检测，避免用户忽略窗口时反复检测。

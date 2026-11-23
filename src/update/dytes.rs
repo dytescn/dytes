@@ -300,6 +300,82 @@ async fn update_one_dependency(
     }
 }
 
+/// 把更新后的依赖版本同步回应用根 `dytes.json`。
+///
+/// - 版本以 `dytes.lock` 为准（各 `update_*` 函数写入的是实际安装版本，
+///   可能与清单里的声明版本不同）；
+/// - 只更新清单中**已声明**的依赖，避免把锁文件里的其他包写成新依赖；
+/// - 设计插件 / 设计软件按现有约定只记录在 `dytes.lock`，不写入清单；
+/// - 写回失败只告警，不影响已经完成的更新。
+fn sync_manifest_dependency(dep: &Dependency) {
+    if matches!(
+        dep.dep_type,
+        DependencyType::DesignPlugins | DependencyType::DesignSoft
+    ) {
+        return;
+    }
+
+    // 更新函数可能因“已是最新”提前返回，锁文件仍是实际安装版本。
+    let Ok(Some(installed)) = get_package_version_from_lock(&dep.name) else {
+        return;
+    };
+
+    let manifest_path = Path::new(&get_app_dir()).join("dytes.json");
+    let Ok(text) = std::fs::read_to_string(&manifest_path) else {
+        return;
+    };
+    let Ok(mut manifest) = serde_json::from_str::<serde_json::Value>(&text) else {
+        eprintln!(
+            "  警告: 解析 {} 失败，未同步依赖版本",
+            manifest_path.display()
+        );
+        return;
+    };
+
+    if !set_dependency_version(
+        &mut manifest,
+        dep.dep_type.manifest_key(),
+        &dep.name,
+        &installed,
+    ) {
+        return;
+    }
+
+    match serde_json::to_string_pretty(&manifest)
+        .map_err(anyhow::Error::from)
+        .and_then(|text| std::fs::write(&manifest_path, text).map_err(anyhow::Error::from))
+    {
+        Ok(()) => println!("  已同步 dytes.json: {} = {}", dep.name, installed),
+        Err(error) => eprintln!("  警告: 写入 {} 失败: {error:#}", manifest_path.display()),
+    }
+}
+
+/// 若 `name` 已声明在清单的 `key` 分组中，把版本更新为 `version`。
+///
+/// 返回是否发生修改；未声明的包不会被新增。
+fn set_dependency_version(
+    manifest: &mut serde_json::Value,
+    key: &str,
+    name: &str,
+    version: &str,
+) -> bool {
+    let Some(deps) = manifest
+        .get_mut(key)
+        .and_then(|value| value.as_object_mut())
+    else {
+        return false;
+    };
+    let Some(current) = deps.get_mut(name) else {
+        return false;
+    };
+    let target = serde_json::Value::String(version.to_string());
+    if *current == target {
+        return false;
+    }
+    *current = target;
+    true
+}
+
 /// 为一个设计包 / 插件安装其声明的依赖。
 ///
 /// 规则与 `dytes update` 一致：
@@ -1072,11 +1148,12 @@ pub async fn init_dytes_with_options(
             continue;
         }
 
-        if let Err(error) =
-            update_one_dependency(dep, &mut sys_init_results, &mut web_init_results).await
-        {
-            println!("  更新 {} 失败: {error:#}", dep.name);
-            failures.push(format!("{} {}: {error:#}", dep.dep_type.as_str(), dep.name));
+        match update_one_dependency(dep, &mut sys_init_results, &mut web_init_results).await {
+            Ok(()) => sync_manifest_dependency(dep),
+            Err(error) => {
+                println!("  更新 {} 失败: {error:#}", dep.name);
+                failures.push(format!("{} {}: {error:#}", dep.dep_type.as_str(), dep.name));
+            }
         }
 
         completed += 1;
@@ -1256,5 +1333,66 @@ mod tests {
 
         set_update_check_after(dir.path(), 12345).unwrap();
         assert_eq!(update_check_after(&path), Some(12345));
+    }
+
+    #[test]
+    fn set_dependency_version_updates_declared_entry_only() {
+        let mut manifest = serde_json::json!({
+            "name": "app",
+            "version": "1.0.0",
+            "dependencies-sys": { "chatllm": "1.0.9" },
+        });
+
+        assert!(set_dependency_version(
+            &mut manifest,
+            "dependencies-sys",
+            "chatllm",
+            "1.0.11"
+        ));
+        assert_eq!(manifest["dependencies-sys"]["chatllm"], "1.0.11");
+
+        // 未声明的包不会被新增。
+        assert!(!set_dependency_version(
+            &mut manifest,
+            "dependencies-sys",
+            "database",
+            "1.0.2"
+        ));
+        assert!(manifest["dependencies-sys"].get("database").is_none());
+
+        // 分组不存在时同样不新增。
+        assert!(!set_dependency_version(
+            &mut manifest,
+            "dependencies-model",
+            "qwen",
+            "1.0.0"
+        ));
+        assert!(manifest.get("dependencies-model").is_none());
+    }
+
+    #[test]
+    fn set_dependency_version_is_noop_when_unchanged() {
+        let mut manifest = serde_json::json!({
+            "dependencies-web": { "setting": "1.0.12" },
+        });
+        assert!(!set_dependency_version(
+            &mut manifest,
+            "dependencies-web",
+            "setting",
+            "1.0.12"
+        ));
+        assert_eq!(manifest["dependencies-web"]["setting"], "1.0.12");
+    }
+
+    #[test]
+    fn set_dependency_version_rejects_non_object_group() {
+        let mut manifest = serde_json::json!({ "dependencies-sys": "broken" });
+        assert!(!set_dependency_version(
+            &mut manifest,
+            "dependencies-sys",
+            "chatllm",
+            "1.0.11"
+        ));
+        assert_eq!(manifest["dependencies-sys"], "broken");
     }
 }

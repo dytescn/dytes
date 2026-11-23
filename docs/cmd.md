@@ -227,12 +227,10 @@ dytes init [--type <type>] [--name <name>] [--version <ver>]
 
 | type | 模板要点 |
 | --- | --- |
-| `app` / `core` | `exports` 指向 `target/release/<name>.exe` |
-| `sys` | `platform-exports.windows` → `libary/<name>.dll` |
-| `web` | `exports` + `init: ["./setup.json"]` |
-| `design_plugins` | `plugins_type`、`targets`、`use_ai`、`mcp`、DLL |
-| `design_soft` | 单文件 exe |
-| `model` | 模型文件 |
+| `app` / `core` / `design_soft` / `model` | `exports` 为空对象 `{}`，按实际产物填写 |
+| `sys` | `platform-exports` 为空对象 `{}`，按实际平台与库文件填写 |
+| `web` | `exports: {}` + `init: ["./setup.json"]` |
+| `design_plugins` | `plugins_type`、`targets`、`use_ai`、`mcp`，`exports: {}` |
 
 ## 10. 推荐工作流
 

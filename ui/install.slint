@@ -476,6 +476,10 @@ export component MainWindow inherits Window {
     width: 720px;
     height: 500px;
     title: "Piksel 应用安装";
+    // 与更新窗口一致：kiosk / 全屏宿主下安装窗口也需要置顶。
+    // 窗口映射前设置会被后端丢弃，由 Rust 侧在显示后延迟置 true。
+    in-out property <bool> pin_top: false;
+    always-on-top: pin_top;
     background: #F3F4F6;
 
     in-out property <int> page_idx: 0;

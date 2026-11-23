@@ -1,7 +1,7 @@
 # dytes 已知问题
 
 > 记录实际使用中遇到的阻塞问题、复现方式与修复方向。
-> 最近更新：2026-11-22（同步 GitHub #23 / #24 / #27 / #28 / #29 / #30；记录 I-13、I-14）
+> 最近更新：2026-11-23（同步 GitHub #25 / #26 / #32；记录 I-15、I-16；修复 #27 / #32 与 GUI Windows 置顶/居中；#31 为测试 issue，未记录）
 
 ---
 
@@ -539,28 +539,32 @@ curl -I https://packages.funxdata.com/app/screen/dytes.json       # 200
 
 **发现日期**：2026-11-21（GitHub #27）
 **影响版本**：issue 未注明（报告日期 2026-11-21）
-**严重程度**：P2 —— 不影响运行，但生成内容与预期不符
-**状态**：0.2.11 未复现，待补充复现步骤
+**严重程度**：P2 —— 不影响运行，但自动生成的导出路径往往不可用
+**状态**：已修复 —— `init` 默认生成空导出字段，由用户按实际产物填写
 
 ### 1. 现象
 
-issue 描述 `dytes init` 生成的 `dytes.json` 中出现 `"exports": {}`，期望为空或省略。
+issue 描述 `dytes init` 生成的 `dytes.json` 中出现 `"exports": {}`。
+确认期望就是空对象：字段保留，内容留空由用户自由填写；有问题的是
+自动填入的 `target/release/<name>.exe` 等猜测路径。
 
-### 2. 0.2.11 核查
+### 2. 原因（0.2.11 核查）
 
-对 app / core / sys / web / design_plugins / design_soft / model 七种类型分别执行
-`dytes init`，结果：
+七种类型分别执行 `dytes init` 时，`exports` / `platform-exports` 都会被填入
+模板猜测的路径（`.exe` / `target/release` / `windows` 平台），这些路径只适用于
+Rust + Windows 项目；其他项目需要手工删除或改写，与 issue 的期望相反。
 
-- `exports` / `platform-exports` 要么是非空映射，要么完全不出现；
-- `--no-exports` 会省略 `exports` 与 `platform-exports`；
-- 未生成空对象 `{}`。
+### 3. 修复
 
-相关实现：`src/utils/templates.rs::init_manifest`。
-
-### 3. 需要补充
-
-请提供 `dytes init` 的完整命令、包类型、dytes 版本与生成的 `dytes.json`，
-确认是否为旧版本、`--no-exports` 或后续手工编辑导致。
+- `src/utils/templates.rs::init_manifest`：除元数据外，导出字段只生成空骨架：
+  - `app` / `core` / `design_plugins` / `design_soft` / `model` / `web`：
+    `"exports": {}`；
+  - `sys`：`"platform-exports": {}`；
+  - `web` 仍写入 `"init": ["./setup.json"]`；
+  - `--no-exports` 保持原有语义：完全不写导出字段；
+- 测试：`templates_default_to_empty_exports`、`tests/cli_init.rs` 各类型断言
+  `exports` / `platform-exports` 为空对象且不含自动路径；
+- 文档：`docs/cmd.md`、`docs/commands/init.md` 更新模板说明。
 
 ---
 
@@ -751,3 +755,124 @@ curl https://packages.funxdata.com/core/dytes/latest/version.js
   `core/dytes/dytes.json`、`core/dytes/latest/version.js`、
   `core/dytes/latest/{windows/dytes.exe,linux/dytes.bin,macos/dytes.app}`
   及其 `.sha256`。
+
+---
+
+## I-15 GitHub #25 / #26：更新窗口被全屏应用遮挡、初始位置越界
+
+**发现日期**：2026-11-18（GitHub #25、#26）
+**严重程度**：P1 —— kiosk / 全屏宿主下更新窗口无法操作
+**状态**：#25 已在 0.2.4 修复；#26 在 Windows 上已显式居中；`install --gui` 已同样置顶并居中。Linux/X11 的负坐标仍交由窗口管理器，未单独验证。
+
+### 1. 现象
+
+- **#25**：宿主应用全屏运行（`_NET_WM_STATE_FULLSCREEN, ABOVE, FOCUSED`）时，
+  `dytes update --gui` 窗口被压在下面，点击「开始更新」事件被宿主窗口接收；
+  dytes 窗口只有 `_NET_WM_STATE_DEMANDS_ATTENTION`，没有 `ABOVE`。
+- **#26**：1920x1080 单屏上窗口初始位置为 `(-14, 20)`（窗口 428x326，
+  内容区 400x260），左侧 14px 在屏幕外，标题栏被裁切。
+
+### 2. 原因
+
+1. `ui/update.slint` 原先没有声明 `always-on-top`；
+2. Slint 1.18 的 `i-slint-core` 只有 `always_on_top` 字段，没有接线；后端
+   `i-slint-backend-winit` 会在属性变化时读取并调用
+   `set_window_level(AlwaysOnTop)`，但窗口映射前设置会丢失，之后属性不变不再重试；
+3. 窗口位置完全交给 WM，无边框 + 置顶组合下被放到负坐标。
+
+### 3. 修复
+
+**0.2.4（#25）**
+
+- `ui/update.slint`：新增 `in-out property <bool> pin_top: false;` 并绑定
+  `always-on-top: pin_top;`（普通 `property` 不生成公开 setter）；
+- `src/utils/gui.rs::run_update_gui`：窗口创建后起后台线程，延迟 400ms
+  `invoke_from_event_loop` 将 `pin_top` 置 `true`，制造一次属性变化，
+  使后端在窗口映射后应用 `WindowLevel::AlwaysOnTop`；
+- 验证：窗口 `_NET_WM_STATE` 出现 `_NET_WM_STATE_ABOVE`，点击可正常触发更新。
+
+**2026-11-23（Windows 支持）**
+
+- `ui/install.slint` 的 `MainWindow` 同样增加 `pin_top` + `always-on-top`，
+  安装窗口不再依赖更新窗口单独处理；
+- `src/utils/gui.rs` 抽出 `schedule_window_placement`：两个窗口显示后延迟
+  400ms 置顶并调用 `center_window`；
+- Windows 上按主显示器与外框尺寸居中：`window.size()` 不含标题栏/边框，
+  用 `GetSystemMetrics` 的 `SM_CXSIZEFRAME` / `SM_CXPADDEDBORDER` /
+  `SM_CYCAPTION` 补齐后计算 `set_position`；
+- Windows 依赖增加 `Win32_UI_WindowsAndMessaging` feature（`GetSystemMetrics`）；
+- 其他平台不强制坐标，继续交给窗口管理器（Wayland 不支持强制定位）。
+
+### 4. Windows 复核（2026-11-23）
+
+构建 `cargo build --features gui`，用 Win32 `GetWindowLongPtr` /
+`GetWindowRect` 检查窗口：
+
+| 窗口 | visible | topmost (`WS_EX_TOPMOST`) | rect | 屏幕 | 在屏幕内 | 居中 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `update --gui` | ✅ | ✅ | `752,390,1168,689` | 1920x1080 | ✅ | ✅ |
+| `install --gui` | ✅ | ✅ | `592,270,1328,809` | 1920x1080 | ✅ | ✅ |
+
+说明：#25 的 kiosk 遮挡问题在 Windows 上通过同一置顶机制生效；Linux X11 的
+`_NET_WM_STATE` 行为未在本机复核。
+
+### 5. 待办
+
+- Linux/X11 下 #26 的负坐标问题仍需在目标发行版复核（当前非 Windows 平台
+  不强制坐标）；
+- GitHub #25 / #26 可在目标平台确认后关闭。
+
+---
+
+## I-16 GitHub #32：`dytes update` 后应用 `dytes.json` 中的版本未更新
+
+**发现日期**：2026-11-23（GitHub #32）
+**影响版本**：0.2.18 及更早
+**严重程度**：待定 —— issue 只有标题，缺命令与日志
+**状态**：已修复 —— `update` 成功后把锁文件中的实际版本写回已声明的依赖
+
+### 1. 现象
+
+GitHub #32 只有标题「dytes update不会更新dytes.json中的版本问题」，没有正文、
+命令或错误输出。
+
+### 2. 已知实现与可能原因
+
+- **应用自身**：`update_app::update_app_info` 会用远程
+  `app/<name>/dytes.json` 合并后写回本地，`version` 与
+  `dependencies-core/sys/web/model` 以远程为准，并保留本地额外依赖，
+  理论上会更新；
+- **依赖包**：`update_one_dependency` 只更新文件并写 `dytes.lock`，
+  **不回写**应用根 `dytes.json` 的 `dependencies-*`。`install` 已在 0.2.13
+  通过 `upsert_dependency` 写回（见 I-13），`update` 没有对应逻辑。
+  因此升级 sys / web / model / core 包后，清单里声明的版本仍是旧值；
+  离线模式（`--offline`）按清单声明版本检查，也会继续看到旧版本；
+- **本地声明高于线上**：`check_version` 会判定无需更新，`dytes.json` 自然不变，
+  这属于预期行为，需要与真实问题区分。
+
+### 3. 相关代码
+
+| 位置 | 作用 |
+| --- | --- |
+| `src/update/dytes.rs::update_one_dependency` | 按类型分发依赖更新，不写回应用清单 |
+| `src/update/dytes.rs::init_dytes_with_options` | `dytes update` 主流程，最后只执行 init 脚本 |
+| `src/update/update_app.rs::merge_local_dependencies` | 应用自身更新时合并写回清单 |
+| `src/install/cli.rs::upsert_dependency` | install 写回依赖版本（0.2.13） |
+
+### 4. 修复
+
+- `src/update/dytes.rs`：`dytes update` 每次依赖更新成功后调用
+  `sync_manifest_dependency`：
+  - 版本以 `dytes.lock` 为准（各 `update_*` 函数写入的是实际安装版本）；
+  - 只更新应用清单中**已声明**的依赖，不把锁文件里的其他包写成新依赖；
+  - `design_plugins` / `design_soft` 仍按约定只记录在锁文件；
+  - 写回失败只告警，不把已完成的更新判为失败；
+- 单元测试：`set_dependency_version_updates_declared_entry_only`、
+  `set_dependency_version_is_noop_when_unchanged`、
+  `set_dependency_version_rejects_non_object_group`；
+- 应用自身 `version` 仍由 `update_app_info` 合并远程清单写回，不受影响。
+
+### 5. 备注
+
+issue 只有标题；若实际现象是应用自身 `version` 字段未变，需要提交
+`dytes update` 输出与 `dytes.json` / `dytes.lock` 的前后内容进一步确认。

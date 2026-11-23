@@ -28,53 +28,23 @@ pub fn init_manifest(
     if !include_exports {
         return manifest;
     }
+    // 只生成导出字段骨架，不猜测产物路径：不同项目（Rust / C++ / 模型 / Web）
+    // 的产物位置和平台后缀差异很大，自动填写的路径往往不可用。
+    // 保留字段本身，方便用户直接填写。
     match pkg_type {
-        PackageType::App | PackageType::Core => {
-            object.insert(
-                "exports".to_string(),
-                json!({ format!("./target/release/{name}.exe"): format!("{name}.exe") }),
-            );
-        }
         PackageType::Sys => {
-            object.insert(
-                "platform-exports".to_string(),
-                json!({
-                    "windows": {
-                        format!("./target/release/{name}.dll"): format!("libary/{name}.dll")
-                    }
-                }),
-            );
+            object.insert("platform-exports".to_string(), json!({}));
         }
         PackageType::Web => {
-            object.insert(
-                "exports".to_string(),
-                json!({
-                    format!("./assets/{name}.js"): format!("{name}.js"),
-                    "./src/setup.json": "setup.json"
-                }),
-            );
+            object.insert("exports".to_string(), json!({}));
             object.insert("init".to_string(), json!(["./setup.json"]));
         }
-        PackageType::DesignPlugins => {
-            object.insert(
-                "exports".to_string(),
-                json!({
-                    format!("./target/release/{name}.dll"): format!("{name}.dll"),
-                    "./mcp.json": "mcp.json"
-                }),
-            );
-        }
-        PackageType::DesignSoft => {
-            object.insert(
-                "exports".to_string(),
-                json!({ format!("./target/release/{name}.exe"): format!("{name}.exe") }),
-            );
-        }
-        PackageType::Model => {
-            object.insert(
-                "exports".to_string(),
-                json!({ format!("./{name}.gguf"): format!("{name}.gguf") }),
-            );
+        PackageType::App
+        | PackageType::Core
+        | PackageType::DesignPlugins
+        | PackageType::DesignSoft
+        | PackageType::Model => {
+            object.insert("exports".to_string(), json!({}));
         }
     }
     manifest
@@ -98,9 +68,38 @@ mod tests {
         ] {
             let value = init_manifest(pkg_type, "demo", "0.1.0", true);
             let config: DytesConfig = serde_json::from_value(value).unwrap();
-            config.validate().unwrap();
+            // `init` 只生成空导出骨架，校验时需允许“仅清单”包。
+            config.validate_with_options(true).unwrap();
             assert_eq!(config.package_type().unwrap(), pkg_type);
             assert!(config.uuid.as_deref().is_some_and(|uuid| !uuid.is_empty()));
+        }
+    }
+
+    #[test]
+    fn templates_default_to_empty_exports() {
+        for pkg_type in [
+            PackageType::App,
+            PackageType::Core,
+            PackageType::Sys,
+            PackageType::Web,
+            PackageType::DesignPlugins,
+            PackageType::DesignSoft,
+            PackageType::Model,
+        ] {
+            let value = init_manifest(pkg_type, "demo", "0.1.0", true);
+            let key = if pkg_type == PackageType::Sys {
+                "platform-exports"
+            } else {
+                "exports"
+            };
+            assert_eq!(value[key], json!({}), "{pkg_type:?} 应生成空 {key}");
+            // 不再猜测 `.exe` / `target/release` 之类的路径。
+            assert!(
+                value[key]
+                    .as_object()
+                    .is_some_and(|object| object.is_empty()),
+                "{pkg_type:?} 的 {key} 不应包含自动路径"
+            );
         }
     }
 
@@ -111,7 +110,7 @@ mod tests {
         assert_eq!(value["targets"], json!(["common"]));
         assert_eq!(value["use_ai"], false);
         assert_eq!(value["mcp"], "mcp.json");
-        assert!(value["exports"].get("./mcp.json").is_some());
+        assert_eq!(value["exports"], json!({}));
     }
 
     #[test]

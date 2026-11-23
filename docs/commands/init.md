@@ -4,6 +4,7 @@
 
 在当前目录（或 `--dir`）生成一份新的 `dytes.json`。根据包类型写入相应的
 `exports` / `platform-exports`、`init`、设计插件字段，并自动生成 `uuid`。
+导出字段默认为空对象 `{}`，由用户按实际产物填写，不再自动猜测路径。
 
 ## 2. 用法
 
@@ -30,6 +31,7 @@ dytes init [--type <type>] [--name <name>] [--version <ver>]
 4. 创建目录，按类型生成模板：
    - 写入 `name`、`uuid`、`version`、`description`、`author`、`type`；
    - 设计插件额外写入 `plugins_type`、`targets`、`use_ai`、`mcp`；
+   - `exports`（或 `sys` 的 `platform-exports`）默认为空对象 `{}`；
    - `--no-exports` 时不写 `exports` / `platform-exports`。
 5. 写入格式化 JSON，输出路径与 UUID。
 
@@ -37,12 +39,10 @@ dytes init [--type <type>] [--name <name>] [--version <ver>]
 
 | type | 模板要点 |
 | --- | --- |
-| `app` / `core` | `exports` 指向 `target/release/<name>.exe` |
-| `sys` | `platform-exports.windows` → `libary/<name>.dll` |
-| `web` | `exports` 包含资源与 `setup.json`，`init: ["./setup.json"]` |
-| `design_plugins` | `plugins_type=plugins`、`targets=["common"]`、`use_ai=false`、`mcp=mcp.json`，导出 DLL 与 `mcp.json` |
-| `design_soft` | 单文件 exe |
-| `model` | `exports` 指向 `<name>.gguf` |
+| `app` / `core` / `design_soft` / `model` | `exports: {}`，按实际产物填写 |
+| `sys` | `platform-exports: {}`，按平台填写 `{ "<platform>": { "<src>": "<dest>" } }` |
+| `web` | `exports: {}`，`init: ["./setup.json"]` |
+| `design_plugins` | `plugins_type=plugins`、`targets=["common"]`、`use_ai=false`、`mcp=mcp.json`，`exports: {}` |
 
 ## 5. 输出
 
@@ -77,12 +77,15 @@ dytes init [--type <type>] [--name <name>] [--version <ver>]
 
 - 不访问网络；
 - `uuid` 每次生成新值，重复 `init --force` 会更换 UUID；
-- 模板只提供占位路径，不创建被导出的文件；
-- 生成后建议依次执行 `dytes check`、`dytes test`、`dytes publish --dry-run`。
+- 导出字段默认为空对象，不猜测产物路径；发布前需按实际产物填写
+  （`sys` 填写 `platform-exports` 的平台映射）；
+- 生成后先填写导出字段，再依次执行 `dytes check`、`dytes test`、
+  `dytes publish --dry-run`。
 
 ## 8. 测试点
 
-- 各类型模板均可被 `DytesConfig::validate` 接受；
+- 各类型模板均可被 `DytesConfig::validate_with_options(true)` 接受；
+- 默认生成空 `exports` / `platform-exports`，不含自动路径；
 - 默认包名取目录名；
 - 已存在清单拒绝覆盖，`--force` 覆盖；
 - `--no-exports` 生成最小清单；

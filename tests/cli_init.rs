@@ -21,9 +21,8 @@ fn init_app_creates_manifest() {
     assert!(manifest["uuid"]
         .as_str()
         .is_some_and(|uuid| !uuid.is_empty()));
-    assert!(manifest["exports"]
-        .get("./target/release/demo.exe")
-        .is_some());
+    // 导出字段默认留空，由用户按实际产物填写。
+    assert_eq!(manifest["exports"], json!({}));
 }
 
 #[test]
@@ -33,10 +32,7 @@ fn init_sys_uses_platform_exports() {
     assert_code(&out, 0);
 
     let manifest = env.read_json("dytes.json");
-    assert_eq!(
-        manifest["platform-exports"]["windows"]["./target/release/info_lib.dll"],
-        "libary/info_lib.dll"
-    );
+    assert_eq!(manifest["platform-exports"], json!({}));
     assert!(manifest.get("exports").is_none());
 }
 
@@ -48,7 +44,7 @@ fn init_web_has_init_scripts() {
 
     let manifest = env.read_json("dytes.json");
     assert_eq!(manifest["init"], json!(["./setup.json"]));
-    assert_eq!(manifest["exports"]["./src/setup.json"], "setup.json");
+    assert_eq!(manifest["exports"], json!({}));
 }
 
 #[test]
@@ -62,6 +58,7 @@ fn init_design_plugins_has_metadata() {
     assert_eq!(manifest["targets"], json!(["common"]));
     assert_eq!(manifest["use_ai"], false);
     assert_eq!(manifest["mcp"], "mcp.json");
+    assert_eq!(manifest["exports"], json!({}));
 }
 
 #[test]

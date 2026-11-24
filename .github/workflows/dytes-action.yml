@@ -1,3 +1,6 @@
+# composite Action 定义，不是 workflow。
+# 按 skills/code.md 3.3 统一放在 .github/workflows/ 下；GitHub 会把它
+# 当作 workflow 解析并在 Actions 页面提示无效，可忽略。
 name: Dytes
 description: Install, update and publish Piksel packages with the dytes CLI
 author: funxdata

@@ -44,3 +44,42 @@ tests/
 
 > 存量说明：仓库中已有的 `src/` 内测试尚未迁移，后续按模块逐步移入 `tests/`；
 > 新增测试必须遵守本条。
+
+### 3.3 发布与 CI 相关文件统一放在 `.github/workflows/`
+
+所有发布 / CI / GitHub Actions 相关文件统一放在 `.github/workflows/`，
+**禁止**放在仓库根目录。包括但不限于：
+
+- workflow 定义：`release.yml`、`purge-cache.yml`；
+- composite Action 定义：`dytes-action.yml`。
+
+具体要求：
+
+- 新增同类文件时直接建在 `.github/workflows/`；不要先放根目录“方便验证/
+  引用”再移动。
+- 仓库根目录只保留构建与包清单相关文件（`Cargo.toml`、`Cargo.lock`、
+  `dytes.json`、`build.rs` 等），不出现发布或 CI 配置文件。
+- 文档、示例与脚本提到这些文件时，路径一律写完整路径（如
+  `.github/workflows/dytes-action.yml`）。
+- `.github/workflows/` 下的 Action 定义不会被识别为仓库根目录的 composite
+  Action，因此 `uses: dytescn/dytes@vX.Y.Z` 的引用方式不可用；需要执行
+  dytes 时，在调用方 workflow 中直接下载发布二进制
+  （见 [../docs/action.md](../docs/action.md)）。
+- `.github/workflows/` 下的 `*.yml` 都会被 GitHub 当作 workflow 解析；Action
+  定义文件应在文件头注释说明用途，Actions 页面中的无效 workflow 提示可忽略。
+
+正确：
+
+```text
+.github/workflows/release.yml
+.github/workflows/purge-cache.yml
+.github/workflows/dytes-action.yml
+```
+
+错误：
+
+```text
+release.yml
+purge-cache.yml
+dytes-action.yml
+```

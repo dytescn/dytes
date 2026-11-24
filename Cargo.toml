@@ -1,6 +1,6 @@
 [package]
 name = "dytes"
-version = "0.2.20"
+version = "0.2.21"
 edition = "2021"
 description = "Design software package management tool."
 license = "MIT"

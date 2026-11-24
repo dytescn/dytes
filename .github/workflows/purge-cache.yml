@@ -1,6 +1,12 @@
 name: Purge dytes CDN cache
 
 on:
+  workflow_call:
+    inputs:
+      fail_on_error:
+        description: "CDN 刷新失败时是否让 job 失败；发布流程传 false"
+        type: boolean
+        default: true
   workflow_dispatch:
   push:
     branches:
@@ -26,8 +32,11 @@ jobs:
           UPYUN_CDN_OPERATOR: ${{ secrets.UPYUN_CDN_OPERATOR }}
           UPYUN_CDN_PASSWORD: ${{ secrets.UPYUN_CDN_PASSWORD }}
           UPYUN_BUCKET: ${{ secrets.UPYUN_BUCKET }}
+          # workflow_dispatch 触发时为空，默认按失败处理。
+          FAIL_ON_ERROR: ${{ inputs.fail_on_error }}
         run: |
           set -euo pipefail
+          fail_on_error="${FAIL_ON_ERROR:-true}"
           # 去掉复制粘贴可能带入的换行与首尾空白。
           UPYUN_CDN_OPERATOR="$(printf '%s' "$UPYUN_CDN_OPERATOR" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
           UPYUN_CDN_PASSWORD="$(printf '%s' "$UPYUN_CDN_PASSWORD" | tr -d '\r\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
@@ -35,8 +44,12 @@ jobs:
           echo "CDN password length: ${#UPYUN_CDN_PASSWORD}"
           echo "UPYUN_BUCKET: ${UPYUN_BUCKET}"
           if [ -z "${UPYUN_CDN_OPERATOR:-}" ] || [ -z "${UPYUN_CDN_PASSWORD:-}" ]; then
-            echo "::error::未配置 UPYUN_CDN_OPERATOR / UPYUN_CDN_PASSWORD，无法刷新 CDN。"
-            exit 1
+            if [ "$fail_on_error" = "true" ]; then
+              echo "::error::未配置 UPYUN_CDN_OPERATOR / UPYUN_CDN_PASSWORD，无法刷新 CDN。"
+              exit 1
+            fi
+            echo "::warning::未配置 UPYUN_CDN_OPERATOR / UPYUN_CDN_PASSWORD，跳过 CDN 刷新；latest 可能仍是旧缓存。"
+            exit 0
           fi
           # 未版本化清单与 latest 别名会被 CDN 缓存 8 天，仅覆盖同名对象
           # 不会让 CDN 立即回源，必须显式刷新。同时提交 http / https，
@@ -85,4 +98,10 @@ jobs:
           status=0
           purge_batch http || status=1
           purge_batch https || status=1
+          if [ "$status" -ne 0 ] && [ "$fail_on_error" != "true" ]; then
+            # 发布流程中 CDN 刷新失败不阻断发布：版本化产物与 GitHub Release
+            # 已可用，latest 的刷新可在又拍云控制台手动完成。
+            echo "::warning::CDN 刷新失败，但不阻断发布；请在又拍云控制台手动刷新。"
+            exit 0
+          fi
           exit "$status"

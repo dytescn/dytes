@@ -1,7 +1,7 @@
 # dytes 已知问题
 
 > 记录实际使用中遇到的阻塞问题、复现方式与修复方向。
-> 最近更新：2026-11-24（同步 GitHub #33 并修复 I-17；核对已关闭 issue：#23 / #24 / #25 / #26 / #27 / #28 / #29 / #30 / #32；#31 为测试 issue，未记录）
+> 最近更新：2026-11-24（同步 GitHub #33 并修复 I-17；记录 I-18：0.2.21–0.2.23 发布构建丢失内置 S3 凭据，0.2.24 修复；核对已关闭 issue：#23 / #24 / #25 / #26 / #27 / #28 / #29 / #30 / #32；#31 为测试 issue，未记录）
 
 ---
 
@@ -944,3 +944,47 @@ dytes publish --manifest-only
 验证：使用 issue 中的 `train_chat` 清单执行 `dytes check` 与
 `dytes publish --dry-run` 均成功，输出识别为 app 类型、索引
 `app/packages.json`、无导出文件。
+
+---
+
+## I-18 0.2.21–0.2.23 发布构建丢失内置 S3 凭据，self-update / update 失效
+
+**发现日期**：2026-11-24
+**影响版本**：0.2.21 / 0.2.22 / 0.2.23（0.2.20 及更早正常）
+**严重程度**：P0 —— 发布二进制无法读取 S3，自更新与在线更新全部失败
+**状态**：0.2.24 已修复
+
+### 1. 现象
+
+用 0.2.23 发布版在无用户配置的环境中执行：
+
+```text
+$ dytes self-update --check
+自更新失败: 读取 S3 dytes 清单失败；... S3 凭证未配置 ...
+```
+
+`dytes config list` 显示 `s3.access_key` / `s3.secret_key = (未设置)`，说明
+二进制没有内置凭据。
+
+### 2. 原因
+
+`build.rs` 通过 `UPYUN_API_KEY` / `UPYUN_API_SECRET`（以及 `UPYUN_BUCKET` /
+`UPYUN_ENDPOINT`）把 S3 配置编译进二进制。0.2.21 精简 release workflow 时，
+`build` job 的 env 从 `UPYUN_*` 改成了 `AWS_*`（供 aws cli 上传），构建步骤
+因此读不到 `UPYUN_*`，三平台发布资产不再内置凭据。
+
+### 3. 修复（0.2.24）
+
+`build` job 同时提供两组变量：
+
+- `UPYUN_API_KEY` / `UPYUN_API_SECRET` / `UPYUN_BUCKET` / `UPYUN_ENDPOINT`：
+  供 `build.rs` 注入发布二进制；
+- `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`：供 aws cli 上传。
+
+`build-action` 仍不注入凭据：Action 资产供 CI 使用，凭据由调用方通过环境变量
+提供（见 [action.md](action.md)）。
+
+### 4. 验证
+
+发布 0.2.24 后，用无用户配置的环境执行 `dytes self-update --check`，应能读到
+线上清单版本。

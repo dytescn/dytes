@@ -155,14 +155,18 @@ jobs:
     needs: preflight
     runs-on: ${{ matrix.os }}
     environment: product
+    # UPYUN_* 由 build.rs 注入发布二进制，供 self-update / update 使用；
+    # AWS_* 仅供 workflow 里的 aws cli 上传使用。两者必须同时存在。
     # 统一用 aws cli 上传：第三方 upload action 在 macOS runner 上会按
     # virtual-host 解析 endpoint（<bucket>.s3...），导致 UnknownEndpoint。
     env:
+      UPYUN_API_KEY: ${{ secrets.UPYUN_API_KEY }}
+      UPYUN_API_SECRET: ${{ secrets.UPYUN_API_SECRET }}
+      UPYUN_BUCKET: ${{ secrets.UPYUN_BUCKET }}
+      UPYUN_ENDPOINT: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
       AWS_ACCESS_KEY_ID: ${{ secrets.UPYUN_API_KEY }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.UPYUN_API_SECRET }}
       AWS_DEFAULT_REGION: us-east-1
-      UPYUN_BUCKET: ${{ secrets.UPYUN_BUCKET }}
-      UPYUN_ENDPOINT: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
     strategy:
       fail-fast: false
       matrix:

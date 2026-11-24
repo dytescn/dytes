@@ -1,7 +1,7 @@
 # dytes 已知问题
 
 > 记录实际使用中遇到的阻塞问题、复现方式与修复方向。
-> 最近更新：2026-11-24（同步 GitHub #33，新增 I-17；核对已关闭 issue：#23 / #24 / #25 / #26 / #27 / #28 / #29 / #30 / #32；#31 为测试 issue，未记录）
+> 最近更新：2026-11-24（同步 GitHub #33 并修复 I-17；核对已关闭 issue：#23 / #24 / #25 / #26 / #27 / #28 / #29 / #30 / #32；#31 为测试 issue，未记录）
 
 ---
 
@@ -884,7 +884,7 @@ issue 只有标题；若实际现象是应用自身 `version` 字段未变，需
 **发现日期**：2026-11-24（GitHub #33）
 **影响版本**：0.2.22 及更早
 **严重程度**：P2 —— 纯依赖集合的 app 包无法直接发布，有命令行绕过方式
-**状态**：待优化 —— 当前可用 `dytes publish --manifest-only` 发布，错误提示未给出该方式
+**状态**：已修复（待发布 0.2.23）—— app 类型无导出时默认按仅清单发布；非 app 仍报错并提示 `--manifest-only`
 
 ### 1. 现象
 
@@ -926,3 +926,21 @@ dytes publish --manifest-only
   “需求 / 训练 / 纯依赖类包请使用 `--manifest-only`”，与
   `src/publish/cli.rs` 中“没有可导出的文件”的提示保持一致；
 - 补充集成测试：无 exports 的 app 包在默认与 `--manifest-only` 下的行为。
+
+### 5. 修复（待发布 0.2.23）
+
+- `src/utils/dytes.rs::validate_with_options`：`type: app` 且 `exports` /
+  `platform-exports` 均为空时不再报错；其他类型仍报错，错误信息补上
+  `--manifest-only` 提示；
+- `src/publish/cli.rs`：`run` 与 `evaluate_check` 对“app 且无导出”自动按
+  `--manifest-only` 处理，`publish --dry-run` / `check` / 实际发布行为一致；
+- `src/publish/dytes.rs::publish_with_options`：入口兜底，直接调用该函数也会
+  按仅清单发布；
+- 测试：`tests/cli_publish.rs`（app 无导出默认成功、非 app 仍失败）、
+  `tests/cli_check.rs`（app 无导出 check 通过、非 app 需 `--manifest-only`）；
+- 顺带修复 `src/utils/s3.rs` 的 `clippy::unnecessary_map_or`，使
+  `cargo clippy --all-targets --locked -- -D warnings` 通过。
+
+验证：使用 issue 中的 `train_chat` 清单执行 `dytes check` 与
+`dytes publish --dry-run` 均成功，输出识别为 app 类型、索引
+`app/packages.json`、无导出文件。

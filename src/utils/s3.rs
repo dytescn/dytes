@@ -21,7 +21,7 @@ const MISSING_CREDENTIALS: &str = "S3 凭证未配置：请执行 `dytes config 
      `cargo build` 时设置 UPYUN_API_KEY / UPYUN_API_SECRET";
 
 fn is_blank(value: &Option<String>) -> bool {
-    value.as_deref().map(str::trim).map_or(true, str::is_empty)
+    value.as_deref().map(str::trim).is_none_or(str::is_empty)
 }
 
 fn credentials_missing(settings: &ResolvedS3) -> bool {

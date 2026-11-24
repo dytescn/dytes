@@ -120,7 +120,13 @@ mod tests {
         assert!(value.get("platform-exports").is_none());
         let config: DytesConfig = serde_json::from_value(value).unwrap();
         config.validate_with_options(true).unwrap();
-        assert!(config.validate().is_err());
+        // app 可以只是应用与依赖的集合，无导出也可发布（GitHub #33）。
+        config.validate().unwrap();
         assert_eq!(config.package_type().unwrap(), PackageType::App);
+
+        // 其他类型无导出时仍需显式 --manifest-only。
+        let value = init_manifest(PackageType::Model, "demo", "0.1.0", false);
+        let config: DytesConfig = serde_json::from_value(value).unwrap();
+        assert!(config.validate().is_err());
     }
 }

@@ -113,3 +113,39 @@ fn publish_missing_manifest_is_config_error() {
     assert_code(&out, 3);
     assert!(stderr(&out).contains("dytes.json"));
 }
+
+#[test]
+fn dry_run_defaults_to_manifest_only_for_app_without_exports() {
+    let env = TestEnv::new();
+    env.write_json(
+        "dytes.json",
+        &json!({
+            "name": "train_chat",
+            "version": "0.1.0",
+            "type": "app",
+            "dependencies-core": {"chatbot": "0.1.3"},
+            "dependencies-sys": {"chatllm": "0.2.6"}
+        }),
+    );
+
+    let out = env.run(&["publish", "--dry-run", "--json"]);
+    assert_code(&out, 0);
+
+    let value: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(value["manifest_only"], true);
+    assert_eq!(value["files"].as_array().map(Vec::len), Some(0));
+    assert_eq!(value["index"], "app/packages.json");
+}
+
+#[test]
+fn dry_run_rejects_non_app_without_exports() {
+    let env = TestEnv::new();
+    env.write_json(
+        "dytes.json",
+        &json!({"name": "requirement", "version": "0.1.0", "type": "model"}),
+    );
+
+    let out = env.run(&["publish", "--dry-run"]);
+    assert_code(&out, 3);
+    assert!(stderr(&out).contains("--manifest-only"));
+}

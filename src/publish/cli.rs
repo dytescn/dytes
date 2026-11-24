@@ -57,6 +57,12 @@ pub fn run(args: PublishArgs) -> Result<()> {
     let config_path = args.config.unwrap_or_else(|| dir.join("dytes.json"));
     let config = DytesConfig::read_with(&config_path, args.manifest_only)?;
     let pkg_type = config.package_type()?;
+    // app 类型可以只是应用与依赖的集合；没有导出文件时默认按仅清单发布，
+    // 用户不必额外记忆 --manifest-only（GitHub #33）。
+    let manifest_only = args.manifest_only
+        || (pkg_type == PackageType::App
+            && config.exports.is_empty()
+            && config.platform_exports.is_empty());
     let platform = args
         .platform
         .clone()
@@ -72,7 +78,7 @@ pub fn run(args: PublishArgs) -> Result<()> {
 
     let uuid = config.uuid.as_deref().unwrap_or("");
     let mut plan = Vec::new();
-    if !args.manifest_only {
+    if !manifest_only {
         let Some((exports, platform_tag)) = platform::select_exports(&config, &platform) else {
             return Err(DytesError::config(format!(
                 "当前平台 {platform} 未在 platform-exports 中配置"
@@ -112,7 +118,7 @@ pub fn run(args: PublishArgs) -> Result<()> {
             "{}",
             json!({
                 "dry_run": args.dry_run,
-                "manifest_only": args.manifest_only,
+                "manifest_only": manifest_only,
                 "type": pkg_type.as_str(),
                 "name": config.name,
                 "uuid": uuid,
@@ -181,7 +187,7 @@ pub fn run(args: PublishArgs) -> Result<()> {
     crate::publish::dytes::publish_with_options(
         &config_path,
         args.force,
-        args.manifest_only,
+        manifest_only,
         args.skip_check,
     )
     .map_err(|error| DytesError::failed(format!("{error:#}")))
@@ -212,6 +218,11 @@ pub fn evaluate_check(
         .map_err(|e| DytesError::config(format!("解析 {} 失败: {e}", config_path.display())))?;
     let config = DytesConfig::read_with(&config_path, manifest_only)?;
     let pkg_type = config.package_type()?;
+    // 与 publish 保持一致：app 类型无导出时按仅清单校验。
+    let manifest_only = manifest_only
+        || (pkg_type == PackageType::App
+            && config.exports.is_empty()
+            && config.platform_exports.is_empty());
 
     if let Some(expected) = expected_type {
         let expected = PackageType::parse(expected)

@@ -337,9 +337,20 @@ impl DytesConfig {
         if self.pkg_type.as_deref().unwrap_or("").trim().is_empty() {
             return Err(DytesError::config("dytes.json 缺少 type"));
         }
-        if !allow_no_exports && self.exports.is_empty() && self.platform_exports.is_empty() {
+        // app 类型天然可能只是应用与依赖的集合，没有需要导出的文件；
+        // 其余类型无导出时仍需显式使用 --manifest-only。
+        let is_app = self
+            .pkg_type
+            .as_deref()
+            .map(|value| value.trim().eq_ignore_ascii_case("app"))
+            .unwrap_or(false);
+        if !allow_no_exports
+            && !is_app
+            && self.exports.is_empty()
+            && self.platform_exports.is_empty()
+        {
             return Err(DytesError::config(
-                "dytes.json 缺少 exports / platform-exports",
+                "dytes.json 缺少 exports / platform-exports；需求 / 训练 / 纯依赖类包请使用 --manifest-only",
             ));
         }
         for pkg_type in self.test_dependency.keys() {

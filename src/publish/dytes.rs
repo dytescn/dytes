@@ -288,6 +288,10 @@ pub fn publish_with_options(
     let manifest: Value =
         serde_json::from_str(&manifest_text).with_context(|| "解析 dytes.json 失败")?;
 
+    // app 类型可以只是应用与依赖的集合；没有导出文件时按仅清单发布。
+    let manifest_only = manifest_only
+        || (pkg_type == "app" && config.exports.is_empty() && config.platform_exports.is_empty());
+
     let platform = crate::utils::platform::current_platform();
     if pkg_type == "design_plugins" && !skip_check {
         let package_dir = json_path.parent().unwrap_or(Path::new("."));

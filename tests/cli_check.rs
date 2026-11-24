@@ -61,14 +61,17 @@ fn check_rejects_type_mismatch() {
 }
 
 #[test]
-fn check_requires_exports_without_manifest_only() {
+fn check_requires_exports_without_manifest_only_for_non_app() {
     let env = TestEnv::new();
     env.write_json(
         "dytes.json",
-        &json!({"name": "demo", "version": "0.1.0", "type": "app"}),
+        &json!({"name": "requirement", "version": "0.1.0", "type": "model"}),
     );
 
-    assert_code(&env.run(&["check"]), 3);
+    let out = env.run(&["check"]);
+    assert_code(&out, 3);
+    assert!(stderr(&out).contains("--manifest-only"));
+
     assert_code(&env.run(&["check", "--manifest-only"]), 0);
 }
 
@@ -103,4 +106,20 @@ fn check_missing_manifest_is_config_error() {
     let out = env.run(&["check"]);
     assert_code(&out, 3);
     assert!(stderr(&out).contains("dytes.json"));
+}
+
+#[test]
+fn check_passes_app_without_exports() {
+    let env = TestEnv::new();
+    env.write_json(
+        "dytes.json",
+        &json!({
+            "name": "train_chat",
+            "version": "0.1.0",
+            "type": "app",
+            "dependencies-core": {"chatbot": "0.1.3"}
+        }),
+    );
+
+    assert_code(&env.run(&["check"]), 0);
 }

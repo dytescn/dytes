@@ -1,7 +1,7 @@
 # dytes 已知问题
 
 > 记录实际使用中遇到的阻塞问题、复现方式与修复方向。
-> 最近更新：2026-11-23（同步 GitHub #25 / #26 / #32；记录 I-15、I-16；修复 #27 / #32 与 GUI Windows 置顶/居中；#31 为测试 issue，未记录）
+> 最近更新：2026-11-24（同步 GitHub #33，新增 I-17；核对已关闭 issue：#23 / #24 / #25 / #26 / #27 / #28 / #29 / #30 / #32；#31 为测试 issue，未记录）
 
 ---
 
@@ -430,7 +430,7 @@ fn strip_verbatim_prefix(path: PathBuf) -> PathBuf {
 **发现日期**：2026-11-16（GitHub #23）
 **影响版本**：0.2.2 起；`--dir` 问题在 0.2.11 仍存在
 **严重程度**：P1 —— 脚本中传相对 `--dir` 时无法读取清单
-**状态**：`--dir` 问题 0.2.12 已修复；`dytes test` 只读 `test-dependency` 的部分已于 0.2.3 修复（见 I-06）
+**状态**：`--dir` 问题 0.2.12 已修复；`dytes test` 只读 `test-dependency` 的部分已于 0.2.3 修复（见 I-06）。GitHub #23 已于 2026-11-23 关闭
 
 ### 1. 现象
 
@@ -491,7 +491,7 @@ let dir = std::env::current_dir()?;
 **发现日期**：2026-11-18（GitHub #24）
 **影响版本**：0.2.3 及所有未内置 S3 凭据的构建（0.2.10 本地构建可复现）
 **严重程度**：P0 —— 所有在线读写链路中断
-**状态**：0.2.11 已改进错误提示；根因（bucket 匿名策略 / 凭证发放）仍待运维确认
+**状态**：0.2.11 已改进错误提示；GitHub #24 已于 2026-11-23 关闭。bucket 匿名策略 / 凭证发放仍需运维确认，本地构建仍按 I-09 配置凭证
 
 ### 1. 现象
 
@@ -540,7 +540,7 @@ curl -I https://packages.funxdata.com/app/screen/dytes.json       # 200
 **发现日期**：2026-11-21（GitHub #27）
 **影响版本**：issue 未注明（报告日期 2026-11-21）
 **严重程度**：P2 —— 不影响运行，但自动生成的导出路径往往不可用
-**状态**：已修复 —— `init` 默认生成空导出字段，由用户按实际产物填写
+**状态**：已修复 —— `init` 默认生成空导出字段，由用户按实际产物填写；GitHub #27 已于 2026-11-23 关闭
 
 ### 1. 现象
 
@@ -573,7 +573,7 @@ Rust + Windows 项目；其他项目需要手工删除或改写，与 issue 的�
 **发现日期**：2026-11-21（GitHub #28）
 **影响版本**：0.2.3 起（依赖改为在线下载）
 **严重程度**：P2 —— 无凭证 / 无网络时测试环境无法建立
-**状态**：符合既有设计，待确认是否补充离线模式
+**状态**：符合既有设计，待确认是否补充离线模式；GitHub #28 已于 2026-11-23 关闭
 
 ### 1. 说明
 
@@ -600,7 +600,7 @@ Rust + Windows 项目；其他项目需要手工删除或改写，与 issue 的�
 
 **发现日期**：2026-11-21 / 2026-11-22（GitHub #29、#30）
 **严重程度**：待定
-**状态**：0.2.12 已修复相对 `--dir` 与 init 依赖 cyctron 两个已复现问题；#29 / #30 仍待补充复现信息
+**状态**：0.2.12 已修复相对 `--dir` 与 init 依赖 cyctron 两个已复现问题；GitHub #29 / #30 已于 2026-11-23 关闭，但两个 issue 仍缺复现信息
 
 ### 1. 现象
 
@@ -762,7 +762,7 @@ curl https://packages.funxdata.com/core/dytes/latest/version.js
 
 **发现日期**：2026-11-18（GitHub #25、#26）
 **严重程度**：P1 —— kiosk / 全屏宿主下更新窗口无法操作
-**状态**：#25 已在 0.2.4 修复；#26 在 Windows 上已显式居中；`install --gui` 已同样置顶并居中。Linux/X11 的负坐标仍交由窗口管理器，未单独验证。
+**状态**：#25 已在 0.2.4 修复；#26 在 Windows 上已显式居中；`install --gui` 已同样置顶并居中。GitHub #25 / #26 已于 2026-11-23 关闭；Linux/X11 的负坐标仍交由窗口管理器，未单独验证。
 
 ### 1. 现象
 
@@ -829,7 +829,7 @@ curl https://packages.funxdata.com/core/dytes/latest/version.js
 **发现日期**：2026-11-23（GitHub #32）
 **影响版本**：0.2.18 及更早
 **严重程度**：待定 —— issue 只有标题，缺命令与日志
-**状态**：已修复 —— `update` 成功后把锁文件中的实际版本写回已声明的依赖
+**状态**：0.2.19 已修复 —— `update` 成功后把锁文件中的实际版本写回已声明的依赖；GitHub #32 已于 2026-11-23 关闭
 
 ### 1. 现象
 
@@ -876,3 +876,53 @@ GitHub #32 只有标题「dytes update不会更新dytes.json中的版本问题�
 
 issue 只有标题；若实际现象是应用自身 `version` 字段未变，需要提交
 `dytes update` 输出与 `dytes.json` / `dytes.lock` 的前后内容进一步确认。
+
+---
+
+## I-17 GitHub #33：`dytes publish` 对无导出的 `app` 包直接报缺少 exports
+
+**发现日期**：2026-11-24（GitHub #33）
+**影响版本**：0.2.22 及更早
+**严重程度**：P2 —— 纯依赖集合的 app 包无法直接发布，有命令行绕过方式
+**状态**：待优化 —— 当前可用 `dytes publish --manifest-only` 发布，错误提示未给出该方式
+
+### 1. 现象
+
+`train_chat` 是 `type: app` 的包，只有 `dependencies-core` / `dependencies-sys`，
+没有任何导出文件：
+
+```bash
+$ dytes publish
+dytes.json 缺少 exports / platform-exports
+```
+
+`dytes publish --dry-run`、`dytes check` 同样在读取清单阶段失败。issue 提到
+app 类型只是各种应用的集合，可能不需要导出任何文件，目前却无法发布。
+
+### 2. 原因
+
+`src/publish/cli.rs::run` 用 `DytesConfig::read_with(&config_path, args.manifest_only)`
+读取清单，而 `src/utils/dytes.rs::validate_with_options(false)` 在 `exports` 与
+`platform-exports` 都为空时直接报错。因此还没走到 publish 自身对“仅清单包”的
+处理，也没有机会提示 `--manifest-only`。
+
+“仅清单”发布本身已经支持：
+
+- `src/publish/cli.rs` / `src/publish/dytes.rs`：`--manifest-only` 时跳过导出文件，
+  只上传 `dytes.json` 与索引；
+- `src/test.rs` 也有同名参数。
+
+### 3. 当前绕过
+
+```bash
+dytes publish --manifest-only
+```
+
+### 4. 优化建议
+
+- `app` 类型天然可以只是应用 / 依赖集合：无导出时默认允许仅清单发布，或在
+  `validate_with_options` 中按 `type: app` 放宽，不必显式加参数；
+- 即使保留显式参数，也应在错误信息中提示
+  “需求 / 训练 / 纯依赖类包请使用 `--manifest-only`”，与
+  `src/publish/cli.rs` 中“没有可导出的文件”的提示保持一致；
+- 补充集成测试：无 exports 的 app 包在默认与 `--manifest-only` 下的行为。

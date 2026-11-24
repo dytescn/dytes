@@ -884,7 +884,7 @@ issue 只有标题；若实际现象是应用自身 `version` 字段未变，需
 **发现日期**：2026-11-24（GitHub #33）
 **影响版本**：0.2.22 及更早
 **严重程度**：P2 —— 纯依赖集合的 app 包无法直接发布，有命令行绕过方式
-**状态**：已修复（待发布 0.2.23）—— app 类型无导出时默认按仅清单发布；非 app 仍报错并提示 `--manifest-only`
+**状态**：0.2.23 已修复 —— app 类型无导出时默认按仅清单发布；非 app 仍报错并提示 `--manifest-only`
 
 ### 1. 现象
 
@@ -927,7 +927,7 @@ dytes publish --manifest-only
   `src/publish/cli.rs` 中“没有可导出的文件”的提示保持一致；
 - 补充集成测试：无 exports 的 app 包在默认与 `--manifest-only` 下的行为。
 
-### 5. 修复（待发布 0.2.23）
+### 5. 修复（0.2.23）
 
 - `src/utils/dytes.rs::validate_with_options`：`type: app` 且 `exports` /
   `platform-exports` 均为空时不再报错；其他类型仍报错，错误信息补上

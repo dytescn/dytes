@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{assert_code, stderr, TestEnv};
+use common::{assert_code, stderr, stdout, TestEnv};
 use serde_json::json;
 
 fn app_manifest() -> serde_json::Value {
@@ -15,19 +15,37 @@ fn app_manifest() -> serde_json::Value {
 }
 
 #[test]
-fn install_requires_package_type() {
+fn install_default_targets_core_piksel() {
     let env = TestEnv::new();
-    let out = env.run(&["install"]);
+
+    // 不带类型时按 core piksel 处理：空目录先初始化清单，再进入依赖安装流程。
+    let out = env.run(&["install", "--offline"]);
     assert_code(&out, 2);
-    assert!(stderr(&out).contains("请指定包类型"));
+    assert!(stderr(&out).contains("离线安装需要显式版本"));
+    assert!(stdout(&out).contains("已初始化应用清单"));
+
+    let manifest = env.read_json("dytes.json");
+    assert_eq!(manifest["type"], "app");
 }
 
 #[test]
-fn install_app_points_to_update_command() {
+fn install_app_rejects_existing_manifest() {
     let env = TestEnv::new();
-    let out = env.run(&["install", "app", "piksel"]);
-    assert_code(&out, 2);
+    env.write_json("dytes.json", &app_manifest());
+
+    let out = env.run(&["install", "app", "demo"]);
+    assert_code(&out, 3);
+    assert!(stderr(&out).contains("已存在"));
     assert!(stderr(&out).contains("dytes update"));
+}
+
+#[test]
+fn install_app_requires_name() {
+    let env = TestEnv::new();
+
+    let out = env.run(&["install", "app"]);
+    assert_code(&out, 2);
+    assert!(stderr(&out).contains("缺少包名"));
 }
 
 #[test]
@@ -47,11 +65,28 @@ fn install_plugin_requires_name() {
 }
 
 #[test]
-fn install_sys_requires_manifest() {
+fn install_sys_initializes_manifest_when_missing() {
     let env = TestEnv::new();
+
     let out = env.run(&["install", "sys", "info_lib", "--offline"]);
-    assert_code(&out, 3);
-    assert!(stderr(&out).contains("dytes.json"));
+    // 清单缺失时先初始化 type=app 的 dytes.json，再继续原来的安装流程；
+    // 离线且未指定版本，因此停在参数校验。
+    assert_code(&out, 2);
+    assert!(stderr(&out).contains("离线安装需要显式版本"));
+    assert!(stdout(&out).contains("已初始化应用清单"));
+
+    let manifest = env.read_json("dytes.json");
+    assert_eq!(manifest["type"], "app");
+    assert!(manifest["uuid"]
+        .as_str()
+        .is_some_and(|uuid| !uuid.is_empty()));
+    let dir_name = env
+        .root()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .to_string();
+    assert_eq!(manifest["name"].as_str(), Some(dir_name.as_str()));
 }
 
 #[test]

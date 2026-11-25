@@ -62,7 +62,7 @@ fn installed_dytes_path(install_dir: &Path) -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-/// 执行完整安装流程：
+/// 执行完整安装流程（默认应用 `APP_NAME`）：
 /// 1. 创建安装目录
 /// 2. 下载应用清单 `app/{APP_NAME}/dytes.json` 并写入安装目录
 /// 3. 在安装目录运行内置更新引擎，并透传其进度
@@ -71,6 +71,22 @@ pub fn run_install<F>(install_dir: &Path, report: F) -> Result<PathBuf>
 where
     F: FnMut(InstallProgress) + Send + 'static,
 {
+    run_install_named(install_dir, APP_NAME, report)
+}
+
+/// 与 [`run_install`] 相同，但允许指定要安装的应用名（远程 `app/<app>/dytes.json`）。
+pub fn run_install_named<F>(install_dir: &Path, app: &str, report: F) -> Result<PathBuf>
+where
+    F: FnMut(InstallProgress) + Send + 'static,
+{
+    let app = app.trim();
+    if app.is_empty() {
+        bail!("应用名不能为空");
+    }
+    if app.contains(['/', '\\']) || app.contains("..") {
+        bail!("非法应用名: {app}");
+    }
+
     let report = Arc::new(Mutex::new(report));
     let emit = {
         let report = report.clone();
@@ -97,14 +113,14 @@ where
 
     // 1. 获取应用配置并写入安装目录
     let app_config = runtime.block_on(async {
-        log.write(&format!("获取应用配置: app/{}/dytes.json", APP_NAME));
+        log.write(&format!("获取应用配置: app/{}/dytes.json", app));
         emit(InstallProgress {
             total: 0.1,
             file: 0.0,
             status: "获取应用配置...".to_string(),
         });
 
-        let app_text = fetch_text(&format!("app/{}/dytes.json", APP_NAME))
+        let app_text = fetch_text(&format!("app/{}/dytes.json", app))
             .await
             .context("获取应用配置失败")?;
         log.write(&format!("应用配置: {}", app_text));

@@ -2,13 +2,17 @@
 
 ## 1. 职责
 
-把一个已发布的包安装到当前应用目录。按类型分为两条链路：
+把一个已发布的包安装到当前应用目录。按类型分为三条链路：
 
+- **默认（未指定类型）**：等价于 `dytes install core piksel`。
+- **应用**（`app`）：检查安装目录是否已有 `dytes.json`：已有则报错（退出码
+  `3`），提示改用 `dytes update`；没有则按 `app/<name>/dytes.json` 安装指定的
+  应用（`--launch` 安装后启动）。
 - **设计包**（`plugin` / `design-soft`）：复用更新引擎下载到 `plugins/<name>/`
   或 `apps/<name>/`，只写 `dytes.lock`，不修改应用根 `dytes.json`；插件安装完成后
   通过 FFI 同步插件数据库。
-- **依赖包**（`sys` / `core` / `web` / `model`）：先把依赖写入应用 `dytes.json`，
-  再只安装目标包。`app` 不通过本命令安装，应使用 `dytes update`。
+- **依赖包**（`sys` / `core` / `web` / `model`）：先检查应用根 `dytes.json`，
+  缺失时自动初始化一个 `type = app` 的最小清单；再把依赖写入清单并只安装目标包。
 
 安装入口同时也承担图形安装器的 `--gui` 分支。图形安装器会先写入应用清单，
 再在安装目录运行更新引擎，等价于一次完整的 `dytes update`。窗口显示后置顶并在
@@ -17,14 +21,16 @@ Windows 上按主显示器居中，避免 kiosk / 全屏宿主遮挡或窗口越
 ## 2. 用法
 
 ```bash
+dytes install [OPTIONS]                          # 等价 install core piksel
+dytes install app <name> [OPTIONS]               # 安装指定应用
 dytes install <type> <name>[@<version>] [OPTIONS]
 dytes install --gui [--dir <path>] [--launch]
 ```
 
 | 参数 | 必填 | 说明 | 当前状态 |
 | --- | --- | --- | --- |
-| `<type>` | 是（非 GUI） | `plugin` / `design-soft` / `sys` / `core` / `web` / `model` | 已实现 |
-| `<name>` | 是 | 包名；支持 `name@1.2.3` | 已实现 |
+| `<type>` | 否 | 省略时按 `core` 安装 `piksel`；`app` / `plugin` / `design-soft` / `sys` / `core` / `web` / `model` | 已实现 |
+| `<name>` | 是（省略类型时除外） | 包名；支持 `name@1.2.3`；安装 app 时为应用名 | 已实现 |
 | `--version <ver>` | 否 | 显式版本，优先于 `name@version` | 已实现 |
 | `--dir <path>` | 否 | 工作目录，默认当前目录 | 已实现 |
 | `--gui` | 否 | 启动图形安装器 | 需要 `--features gui` |
@@ -42,11 +48,13 @@ dytes install --gui [--dir <path>] [--launch]
 ### 3.1 通用入口
 
 1. `--gui` 分支：调用图形安装器；未启用 `gui` feature 时返回退出码 `2`。
-2. 切换工作目录到 `--dir`（默认当前目录）。
+2. 确定应用根：`--dir` > `DYTES_APP_DIR` > 当前目录，并切换工作目录。
 3. 解析类型与名称：
+   - 未指定类型 → 按 `core piksel` 处理；
+   - `app` → `install_app`：目录已有 `dytes.json` 时返回 `3`；没有则按
+     `app/<name>/dytes.json` 安装指定应用（`--launch` 安装后启动）；
    - 设计包 → `DesignKind::Plugin` / `DesignKind::Soft`；
-   - 依赖包 → `install_dependency`；
-   - `app` → 提示改用 `dytes update --auto`；
+   - 依赖包 → `install_dependency`（清单缺失时先初始化 `type = app`）；
    - 未知类型 → 退出码 `2`。
 
 ### 3.2 设计包
@@ -59,7 +67,8 @@ dytes install --gui [--dir <path>] [--launch]
 
 ### 3.3 依赖包
 
-1. 读取应用根 `dytes.json`，不存在时退出码 `3`；
+1. 读取应用根 `dytes.json`；不存在时按目录名初始化一个 `type = app` 的最小清单
+   （`name` 取目录名，版本 `0.1.0`），然后继续安装；
 2. 确定版本：
    - 显式指定 → 直接使用；
    - `--offline` 且未指定 → 参数错误；
@@ -104,8 +113,8 @@ dytes install --gui [--dir <path>] [--launch]
 | --- | --- |
 | `0` | 安装成功或已是最新版本 |
 | `1` | 网络、下载、checksum、安装失败 |
-| `2` | 缺少类型/名称、未知类型、离线未指定版本、未启用 GUI |
-| `3` | `dytes.json` 缺失或无法解析 |
+| `2` | 未知类型、缺少依赖包名、离线未指定版本、未启用 GUI |
+| `3` | `dytes.json` 无法解析；安装 app 时目录里已有 `dytes.json` |
 
 ## 6. 边界与约束
 
@@ -118,8 +127,11 @@ dytes install --gui [--dir <path>] [--launch]
 
 ## 7. 测试点
 
-- 缺少类型 / 名称 / 未知类型返回 `2`；
-- 依赖包在缺失 `dytes.json` 时返回 `3`；
+- 缺少依赖包名 / 未知类型返回 `2`；
+- 省略类型时按 `core piksel` 安装；
+- `app` 安装时目录已有 `dytes.json` 返回 `3`，提示改用 `dytes update`；
+- `app` 缺少应用名返回 `2`；
+- 依赖包在缺失 `dytes.json` 时自动初始化 `type = app` 清单并继续；
 - `--offline` 未指定版本返回 `2`；
 - 设计包安装写入 `plugins/<name>/` 与 `dytes.lock`；
 - 同版本跳过、`--force` 重装；

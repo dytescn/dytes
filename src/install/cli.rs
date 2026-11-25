@@ -5,10 +5,12 @@ use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::install::installer;
 use crate::install::package as install_package;
-use crate::utils::error::{DytesError, Result};
 use crate::update::update_design::DesignKind;
-use crate::utils::dytes::DependencyType;
+use crate::utils::dytes::{DependencyType, PackageType};
+use crate::utils::error::{DytesError, Result};
+use crate::utils::templates;
 use crate::utils::version::parse_name_version;
 
 #[derive(Args)]
@@ -52,11 +54,19 @@ pub fn run(args: InstallArgs) -> Result<()> {
         }
     }
 
-    // 应用根：`--dir` 明确指定时以其为准；否则与更新引擎使用同一个根
-    // （支持 `DYTES_APP_DIR`，没有时回退当前目录）。
+    // 应用根：`--dir` 明确指定时以其为准；否则优先 `DYTES_APP_DIR`，再回退
+    // 当前目录。这里不能直接用 `get_app_dir()`：它在 release 构建下会回退到
+    // 可执行文件目录，导致在空目录执行 `dytes install` 时装到 dytes 自己的
+    // bin 目录里。
     let requested_dir = match &args.dir {
         Some(dir) => dir.clone(),
-        None => PathBuf::from(crate::update::env::get_app_dir()),
+        None => std::env::var("DYTES_APP_DIR")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from(".")),
     };
     std::env::set_current_dir(&requested_dir)
         .map_err(|e| DytesError::failed(format!("切换目录失败: {e}")))?;
@@ -66,10 +76,16 @@ pub fn run(args: InstallArgs) -> Result<()> {
     // 固定应用根，确保清单写入位置与文件安装位置一致。
     std::env::set_var("DYTES_APP_DIR", &dir);
 
-    let pkg_type = args.pkg_type.as_deref().ok_or_else(|| {
-        DytesError::args("请指定包类型，例如：dytes install plugin cdr_check_txt")
-    })?;
-    let (name, version) = parse_name_version(args.name.as_deref(), args.version.as_deref())
+    // 默认情况（未指定类型）安装 core 包 piksel；`app` 类型要求显式包名。
+    let default_type = args.pkg_type.is_none();
+    let pkg_type = args.pkg_type.as_deref().unwrap_or("core");
+
+    // app 在下面的分支里处理；其余类型仍然必须提供包名。
+    let name_arg = args
+        .name
+        .as_deref()
+        .or_else(|| default_type.then_some("piksel"));
+    let (name, version) = parse_name_version(name_arg, args.version.as_deref())
         .ok_or_else(|| DytesError::args("缺少包名"))?;
 
     let kind = match DependencyType::from_name(pkg_type) {
@@ -86,14 +102,10 @@ pub fn run(args: InstallArgs) -> Result<()> {
             )
         }
         None => match pkg_type.trim().to_ascii_lowercase().as_str() {
-            "app" | "apps" => {
-                return Err(DytesError::args(
-                    "安装应用请使用 dytes update --auto（当前目录的 dytes.json 即应用清单）",
-                ))
-            }
+            "app" | "apps" => return install_app(&dir, &name, args.launch, args.json),
             other => {
                 return Err(DytesError::args(format!(
-                    "install 暂不支持类型 {other}；支持 plugin / design-soft / sys / core / web / model"
+                    "install 暂不支持类型 {other}；支持 app / plugin / design-soft / sys / core / web / model"
                 )))
             }
         },
@@ -160,6 +172,73 @@ fn upsert_dependency(
     Ok(())
 }
 
+/// 安装应用：目录里已经有 `dytes.json` 时拒绝安装，避免把现有应用覆盖成
+/// 新的安装；目录为空时直接调用安装器。
+fn install_app(dir: &Path, name: &str, launch: bool, json: bool) -> Result<()> {
+    let app_name = name.trim();
+    if app_name.is_empty() {
+        return Err(DytesError::args("缺少应用名"));
+    }
+
+    let manifest_path = dir.join("dytes.json");
+    if manifest_path.exists() {
+        return Err(DytesError::config(format!(
+            "{} 已存在，当前目录已安装应用；更新请执行 dytes update",
+            manifest_path.display()
+        )));
+    }
+
+    let app_path = installer::run_install_named(dir, app_name, move |progress| {
+        if !json && !progress.status.is_empty() {
+            println!("{}", progress.status);
+        }
+    })
+    .map_err(|e| DytesError::failed(format!("安装应用失败: {e:#}")))?;
+
+    if json {
+        println!(
+            "{}",
+            json!({
+                "type": "app",
+                "name": app_name,
+                "path": app_path,
+            })
+        );
+    } else {
+        println!("已安装应用: {} -> {}", app_name, app_path.display());
+    }
+
+    if launch {
+        installer::launch_app(&app_path)
+            .map_err(|e| DytesError::failed(format!("启动应用失败: {e:#}")))?;
+    }
+    Ok(())
+}
+
+/// 确保应用根存在 `dytes.json`；缺失时按 `type = app` 初始化一个最小清单。
+fn ensure_app_manifest(dir: &Path, json: bool) -> Result<PathBuf> {
+    let manifest_path = dir.join("dytes.json");
+    if manifest_path.exists() {
+        return Ok(manifest_path);
+    }
+
+    let name = dir
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "app".to_string());
+    let manifest = templates::init_manifest(PackageType::App, &name, "0.1.0", true);
+    fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)
+        .map_err(|e| DytesError::config(format!("写入 {} 失败: {e}", manifest_path.display())))?;
+    if !json {
+        println!(
+            "未找到 dytes.json，已初始化应用清单（type=app）: {}",
+            manifest_path.display()
+        );
+    }
+    Ok(manifest_path)
+}
+
 /// 安装 sys / core / web / model 依赖：写入当前清单后执行 update。
 fn install_dependency(
     dir: &Path,
@@ -170,13 +249,7 @@ fn install_dependency(
     json: bool,
 ) -> Result<()> {
     let key = dep_type.manifest_key();
-    let manifest_path = dir.join("dytes.json");
-    if !manifest_path.exists() {
-        return Err(DytesError::config(format!(
-            "{} 不存在；请先执行 dytes init 或在应用目录运行",
-            manifest_path.display()
-        )));
-    }
+    let manifest_path = ensure_app_manifest(dir, json)?;
 
     let text = fs::read_to_string(&manifest_path)
         .map_err(|e| DytesError::config(format!("读取 {} 失败: {e}", manifest_path.display())))?;

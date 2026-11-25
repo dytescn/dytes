@@ -64,6 +64,10 @@ Linux runner）；不支持 `install --gui` / `update --gui`。
 
 ## 3. 凭证
 
+发布产物在构建时已内置官方 S3 凭据（端点 `https://s3.api.upyun.com`、桶
+`packages`），下载 `dytes-action.bin` 后可直接 `dytes publish`，发布官方仓库的
+其它库无需额外配置。
+
 优先级：环境变量 > `dytes config` 用户配置 > 构建内置值。需要独立凭证时：
 
 ```yaml

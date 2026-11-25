@@ -1,7 +1,7 @@
 # dytes 已知问题
 
 > 记录实际使用中遇到的阻塞问题、复现方式与修复方向。
-> 最近更新：2026-11-24（同步 GitHub #33 并修复 I-17；记录 I-18：0.2.21–0.2.23 发布构建丢失内置 S3 凭据，0.2.24 修复；核对已关闭 issue：#23 / #24 / #25 / #26 / #27 / #28 / #29 / #30 / #32；#31 为测试 issue，未记录）
+> 最近更新：2026-11-25（同步 GitHub #34 并记录 I-19：安装器 / 更新器硬编码 `app/<name>/dytes.json`，`type: core` 的应用无法安装与升级；核对线上状态：#33 已修复但 issue 仍未关闭，#34 open，#23–#30、#32 仍为 closed）
 
 ---
 
@@ -998,3 +998,104 @@ $ dytes self-update --check
 结论：0.2.24 已重新内置 UPYUN 凭据；剩余失败与本机到又拍云 S3 的网络有关。
 发布 workflow 的 `Verify published files` 已通过 CDN 校验版本化产物、`latest`
 别名与清单内容。
+
+---
+
+## I-19 GitHub #34：安装器 / 更新器硬编码 `app/<name>/dytes.json`，`type: core` 的应用无法升级
+
+**发现日期**：2026-11-25（GitHub #34）
+**影响版本**：0.2.25（Linux）；Piksel 1.1.32 → 1.1.34 升级
+**严重程度**：P1 —— 默认应用（Piksel）的安装 / 升级链路在发布类型改为 `core` 后断链
+**状态**：未修复（2026-11-25 核对 0.2.25 源码与线上分发源：属于 Piksel 迁移 `app` →
+`core` 时的遗留——旧 `app/` 清单与索引残留，`core/packages.json` 未登记 piksel）
+
+### 1. 现象
+
+Piksel 1.1.34 把 `dytes.json` 的 `type` 从 `app` 改为 `core`，发布路径随之变为
+`core/piksel/dytes.json`。已安装 1.1.32 的环境执行 `dytes update --check --json`
+时，Piksel 被识别为 `type: app`、`remote_version: null`、`needs_update: false`：
+
+```json
+{"local_version":null,"name":"piksel","needs_update":false,"remote_version":null,"type":"app"}
+```
+
+`install.log` 显示安装器读取的仍是旧路径与旧清单：
+`获取应用配置: app/piksel/dytes.json`，内容仍为 1.1.32，于是更新引擎认为无需更新。
+同时已安装的 `cyctron`、`dytes` 等 core 包显示 `local_version: null`。
+
+### 2. 原因
+
+安装器、应用更新与更新检查都写死了 `app/<name>/dytes.json`，不参考清单里的
+`type`，因此 `core/piksel/dytes.json` 永远不会被查询：
+
+- `src/install/installer.rs:116,123`（0.2.25 仍为
+  `run_install_named` 内的 `fetch_text(&format!("app/{}/dytes.json", app))`）；
+- `src/update/update_app.rs:31-33` 的 `fetch_remote_app_info` 固定
+  `format!("app/{}/dytes.json", name)`；
+- `src/update/dytes.rs:664-680` 的 `app_need_update` 用本地清单 `version` 与上述
+  远端版本比较，`update --check` 同样走这条路径。
+
+反向的依赖更新则按类型拼接路径（`src/update/dytes.rs:97` 的
+`{dep_type.remote_dir()}/{name}/dytes.json`）。当应用自身从 `app` 变为 `core`
+后，它落在两套逻辑之间的空隙里：应用更新只认 `app/`，依赖更新又不接管
+“应用自身”。另外 core 包没有本地清单时缺少版本来源，`local_version` 只能输出
+`null`。
+
+按安装方式区分（0.2.25 实测代码路径）：
+
+- `dytes install`（不指定类型）默认按 core 依赖安装 piksel，走
+  `install_dependency` → `update_os`，读 `core/piksel/dytes.json`，能装到 1.1.34；
+- `dytes install app piksel` 与内置安装器 `run_install[_named]` 仍读
+  `app/piksel/dytes.json`，会装成 1.1.32（`type: app`）；
+- 既有的 1.1.32 安装执行 `dytes update` 时走 `app_need_update`，远端仍是
+  `app/piksel/dytes.json` 的 1.1.32，永远判定无需更新；依赖也沿用旧清单
+  （`dytes 0.1.30`、`chatllm 1.0.16`），整条升级链停在迁移前。
+
+### 3. 线上核实（2026-11-25，CDN `packages.funxdata.com`）
+
+| 对象 | 实际内容 |
+| --- | --- |
+| `app/piksel/dytes.json` | 200，`version: 1.1.32`、`type: app`；Last-Modified 2026-11-12 |
+| `app/packages.json` | 200，piksel 仍为 1.1.13（索引早于清单 1.1.32）；Last-Modified 2026-11-21 |
+| `core/piksel/dytes.json` | 200，`version: 1.1.34`、`type: core`；Last-Modified 2026-11-24 |
+| `core/packages.json` | 200，`packages` 中 **没有** piksel（只有 cyctron / chatbot / update） |
+| `core/piksel/1.1.34/{windows,linux,macos}/piksel.{exe,bin,app}` | 均 200，约 1.23 / 5.65 / 1.70 MB |
+| `core/piksel/1.1.33/dytes.json` 及产物 | 404 |
+
+结论：1.1.33 没有成功发布，1.1.34 是迁移到 `core/` 后第一个完整产物；发布侧只
+上传了新路径，没有清理 `app/` 旧清单、没有把 piksel 登记进 `core/packages.json`，
+`app/packages.json` 里甚至还是更早的 1.1.13。依赖更新因为索引缺条目会回退到
+`core/piksel/dytes.json`，仍能读到 1.1.34；而应用自身更新固定读 `app/`，所以只有
+“已安装的旧应用”会断链。
+
+### 4. 修复建议
+
+- 远端清单路径按本地 `dytes.json` 的 `type` 解析（`PackageType` 已有
+  `app` / `core` 判定，`DependencyType::remote_dir()` 已有目录映射），或同时探测
+  `app/<name>` 与 `core/<name>` 并按类型优先匹配；
+- 过渡期兼容旧安装：本地 `type: app` 但远端只有 `core/<name>`（或 `core/` 版本
+  更高）时回退并迁移——按 core 依赖安装 1.1.34，同时更新本地清单 `type` 与
+  `dytes.lock` 记录，避免下次又回到 `app/`；
+- 明确应用自身为 `core` 时的更新归属：由应用更新逻辑按类型取清单，还是转为
+  依赖更新；避免两条路径都不处理；
+- 下载基址也不要用 `format!("app/{}", name)`
+  （`src/update/update_app.rs` 第 4 步的 `remote_base`），否则即使读到 core 清单
+  也会去 `app/piksel/1.1.34/...` 下载；
+- `is_missing_remote_manifest`（`src/update/dytes.rs:1220-1226`）里的
+  `text.contains("下载 app/")` 需要随路径一起放宽，否则 core 包缺失会被算作
+  更新失败；
+- 发布侧补齐数据：把 piksel 登记到 `core/packages.json`，清理或冻结
+  `app/piksel`（保留旧安装读取即可，不再作为新版本来源），修正
+  `app/packages.json` 里过期的 1.1.13；
+- `local_version` 为 `null` 时从安装记录 / 锁文件 / 二进制元数据读取版本，至少在
+  `--json` 输出中给出原因；
+- 补充集成测试：`type: core` 应用的安装、`update --check`、旧 `app` 安装迁移到
+  `core` 以及实际升级。
+
+### 5. 备注
+
+处理意见已回复在 issue 评论：
+<https://github.com/dytescn/dytes/issues/34#issuecomment-7150796971>。
+
+issue 提到 Piksel 侧发布配置问题已同步到 `dytescn/Piksel`。本次仅同步记录与
+线上核实，未修改代码。

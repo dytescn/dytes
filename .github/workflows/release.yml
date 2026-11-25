@@ -190,6 +190,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Verify S3 credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for var in UPYUN_API_KEY UPYUN_API_SECRET; do
+            if [ -z "${!var:-}" ]; then
+              echo "::error::$var 未配置：发布二进制将缺少内置 S3 凭据"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+          echo "S3 凭据已注入，将在编译期内置到发布二进制"
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -240,6 +256,25 @@ jobs:
           cp "target/release/${{ matrix.binary }}" "upload/${{ matrix.package }}"
           cp "target/release/${{ matrix.binary }}" "artifact/${{ matrix.artifact }}"
           ls -l upload artifact
+
+      # 与 build-action 一致：确认发布二进制真的内置了 S3 凭据。
+      - name: Verify builtin S3 credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="artifact/${{ matrix.artifact }}"
+          for var in UPYUN_API_KEY UPYUN_API_SECRET; do
+            value="${!var:-}"
+            if [ -z "$value" ]; then
+              echo "::error::$var 为空，无法校验内置凭据"
+              exit 1
+            fi
+            if ! grep -aFq -- "$value" "$binary"; then
+              echo "::error::$var 未写入 $binary：build.rs 未拿到该变量（检查 env 作用域或清理构建缓存）"
+              exit 1
+            fi
+          done
+          echo "${{ matrix.artifact }} 已内置 S3 凭据"
 
       # 防止构建机漂移把 glibc 基线抬高（ubuntu-latest 已从 22.04 升到 24.04）。
       - name: Verify glibc baseline
@@ -321,9 +356,34 @@ jobs:
     name: Build action (Linux, no GUI)
     needs: preflight
     runs-on: ubuntu-22.04
+    environment: product
+    # dytes-action.bin 会被其它仓库直接下载用于 `dytes publish`，因此必须自带
+    # 内置 S3 凭据：build.rs 只在编译期看到 UPYUN_* 时才写入，缺一个就会退化成
+    # 无凭据构建，第三方仓库发布任何包都会失败。
+    env:
+      UPYUN_API_KEY: ${{ secrets.UPYUN_API_KEY }}
+      UPYUN_API_SECRET: ${{ secrets.UPYUN_API_SECRET }}
+      UPYUN_BUCKET: ${{ secrets.UPYUN_BUCKET }}
+      UPYUN_ENDPOINT: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Verify S3 credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for var in UPYUN_API_KEY UPYUN_API_SECRET; do
+            if [ -z "${!var:-}" ]; then
+              echo "::error::$var 未配置：dytes-action.bin 将缺少内置 S3 凭据，其它仓库无法直接 publish"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+          echo "S3 凭据已注入，将在编译期内置到 dytes-action.bin"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -345,6 +405,26 @@ jobs:
           mkdir -p artifact
           cp target/release/dytes artifact/dytes-action.bin
           ls -l artifact
+
+      # build.rs 通过 rustc-env 把 UPYUN_* 写进二进制；这里直接检查产物，
+      # 防止缓存 / 变量作用域问题导致最终资产又变回无内置凭据。
+      - name: Verify builtin S3 credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="artifact/dytes-action.bin"
+          for var in UPYUN_API_KEY UPYUN_API_SECRET; do
+            value="${!var:-}"
+            if [ -z "$value" ]; then
+              echo "::error::$var 为空，无法校验内置凭据"
+              exit 1
+            fi
+            if ! grep -aFq -- "$value" "$binary"; then
+              echo "::error::$var 未写入 $binary：build.rs 未拿到该变量（检查 env 作用域或清理构建缓存）"
+              exit 1
+            fi
+          done
+          echo "dytes-action.bin 已内置 S3 凭据"
 
       # 与 GUI Linux 构建保持相同的 glibc 基线，避免 action 资产在旧 runner 上不可用。
       - name: Verify glibc baseline

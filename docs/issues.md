@@ -1,7 +1,7 @@
 # dytes 已知问题
 
 > 记录实际使用中遇到的阻塞问题、复现方式与修复方向。
-> 最近更新：2026-11-27（同步 GitHub #35 / #36 并记录 I-20：exFAT 上创建命令入口的 symlink 返回 EPERM，install/update 中断；I-21：S3 下载错误被 anyhow 字符串化，`is_retryable_error` 失效，10 次重试实际只执行 1 次；核对线上状态：#33 / #34 / #35 / #36 open，#23–#32 均 closed，其中 #31 为测试 issue）
+> 最近更新：2026-11-27（同步 GitHub #35 / #36 并记录 I-20 / I-21；两个问题均已修复并通过单元测试，待发布：I-20 symlink 失败回退包装脚本 / 复制；I-21 引入 RetryableError 标记修复 S3 重试判定；核对线上状态：#33 / #34 / #35 / #36 open，#23–#32 均 closed，其中 #31 为测试 issue）
 
 ---
 
@@ -1107,7 +1107,7 @@ issue 提到 Piksel 侧发布配置问题已同步到 `dytescn/Piksel`。本次�
 **发现日期**：2026-11-27（GitHub #35）
 **影响版本**：0.2.26（Linux；安装目录位于 exFAT / FAT32）
 **严重程度**：P1 —— 安装目录放在 exFAT / FAT32 移动硬盘的用户无法完成安装或更新
-**状态**：未修复（2026-11-27 核对 0.2.26 源码：`src/update/executable.rs:35` 仍直接调用 `symlink` 并把错误向上传播）
+**状态**：已修复（代码已提交，待下一个版本发布）：符号链接失败时依次回退为 shell 包装脚本、复制；chmod 失败不再中断安装。
 
 ### 1. 现象
 
@@ -1143,17 +1143,26 @@ exFAT / FAT32 不支持符号链接，`symlink(2)` 返回 `EPERM`。该错误被
 - 所有把安装目录放在 exFAT / FAT32 移动硬盘上的 Linux 用户都无法完成安装或更新；
 - 与 Piksel #4「移动硬盘（exFAT）安装场景」直接相关。
 
-### 4. 修复建议
+### 4. 修复方案（已实现）
 
-- `symlink` 失败时按文件系统能力回退：符号链接 → shell 包装脚本
-  （`#!/bin/sh` + `exec "$(dirname "$0")/cyctron.bin" "$@"`）→ 复制，随后 `chmod 755`；
-- 或启动时用 `statfs` 的 `f_type` 识别 exFAT / FAT32，直接跳过符号链接；
-- 至少把「命令入口创建失败」降级为警告并继续，最后汇总提示，而不是中断整个安装；
-- 增加 exFAT / FAT32 集成测试（loop 挂载镜像即可）。
+`src/update/executable.rs` 的 `install_command_alias` 改为三级回退：
+
+1. 优先创建符号链接（支持 symlink 的文件系统）；
+2. `symlink` 失败时写入 `#!/bin/sh` 包装脚本，用 `$(dirname "$0")/<filename>`
+   定位同目录真实产物并透传参数；
+3. 包装脚本也失败时复制产物。
+
+同时：
+
+- 给产物 / 入口设置 `0755` 改为尽力而为：exFAT / FAT32 不支持 `chmod`，
+  失败不再中断安装或更新；
+- 入口创建阶段不再把 `symlink` 的 `EPERM` 当作致命错误；
+- 新增 `wrapper_script_execs_sibling_binary` 单测校验脚本内容。
 
 ### 5. 备注
 
-GitHub issue：<https://github.com/dytescn/dytes/issues/35>。本次仅同步记录，未修改代码。
+GitHub issue：<https://github.com/dytescn/dytes/issues/35>。已修复并通过
+`cargo test --lib`，待下一个版本发布。
 
 ---
 
@@ -1162,7 +1171,7 @@ GitHub issue：<https://github.com/dytescn/dytes/issues/35>。本次仅同步记
 **发现日期**：2026-11-27（GitHub #36）
 **影响版本**：0.2.26（Linux）
 **严重程度**：P1 —— 临时网络抖动 / 服务端 5xx 会直接导致安装与更新失败
-**状态**：未修复（2026-11-27 核对 0.2.26 源码：`is_retryable_error` 只识别 `reqwest::Error`，S3 HEAD 错误已被格式化为字符串）
+**状态**：已修复（代码已提交，待下一个版本发布）：新增 `RetryableError` 标记，并按 `SdkError` 类型分类可重试错误。
 
 ### 1. 现象
 
@@ -1216,13 +1225,20 @@ fn is_retryable_error(e: &anyhow::Error) -> bool {
 短暂网络抖动或服务端 5xx 会直接导致安装 / 更新失败，与“10 次重试”的设计预期不符，
 也掩盖了真实的临时性故障。
 
-### 4. 修复建议
+### 4. 修复方案（已实现）
 
-- 保留原始错误类型：`anyhow::Error::new(error).context(format!("S3 HEAD 请求失败: {object_name}"))`；
-- 或定义带 `retryable` 标记的错误类型，在 `is_retryable_error` 中直接读取；
-- S3 5xx / 超时 / 连接失败明确可重试，404 / NoSuchKey 快速失败；
-- 增加单测：分别构造 `reqwest` 超时错误和字符串化错误，断言重试判定结果。
+- 新增 `RetryableError` 标记类型：`is_retryable_error` 沿 `anyhow` 错误链查找该
+  标记，即使错误被 `format!` / 多层 `context` 处理也不会丢失重试意图；
+- `download_from_s3` 的 HEAD 与 Range GET 用 `is_retryable_s3_error` 按
+  `SdkError` 变体分类：超时、`DispatchFailure`、`ResponseError` 与 5xx 可重试，
+  4xx / 404 / NoSuchKey 仍快速失败；
+- S3 数据流读取遇到 `TimedOut` / `ConnectionReset` / `ConnectionAborted` /
+  `BrokenPipe` / `UnexpectedEof` 时标记为可重试；
+- HTTP 下载的 5xx 响应同样标记为可重试；
+- 重试日志改为显示实际生效的 `max_retries`（启动模式为 2，不再误报 10）；
+- 新增 `retryable_marker_survives_context`、`plain_error_is_not_retryable` 单测。
 
 ### 5. 备注
 
-GitHub issue：<https://github.com/dytescn/dytes/issues/36>。本次仅同步记录，未修改代码。
+GitHub issue：<https://github.com/dytescn/dytes/issues/36>。已修复并通过
+`cargo test --lib`，待下一个版本发布。

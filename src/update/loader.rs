@@ -1,5 +1,6 @@
 use crate::utils::s3;
 use anyhow::{anyhow, Context, Result};
+use aws_sdk_s3::error::SdkError;
 use futures_util::StreamExt;
 use reqwest;
 use std::path::Path;
@@ -192,7 +193,7 @@ pub async fn download_file(url_or_path: &str, output_dir: &str) -> bool {
             Ok(()) => return true,
             Err(e) => {
                 last_error = format!("{e:#}");
-                eprintln!("  下载失败 (尝试 {}/{}): {e:#}", attempt + 1, MAX_RETRIES);
+                eprintln!("  下载失败 (尝试 {}/{}): {e:#}", attempt + 1, max_retries);
                 if !is_retryable_error(&e) {
                     break;
                 }
@@ -205,18 +206,61 @@ pub async fn download_file(url_or_path: &str, output_dir: &str) -> bool {
     false
 }
 
+/// 显式标记可重试错误。
+///
+/// `anyhow` 在错误被 `format!` 字符串化或经过多层 `context` 后会擦除原始类型，
+/// 仅对最外层做 `downcast` 无法识别 S3 SDK 的临时性错误。用该标记承载重试意图，
+/// 并在 `is_retryable_error` 中沿错误链查找。
+#[derive(Debug)]
+struct RetryableError(anyhow::Error);
+
+impl std::fmt::Display for RetryableError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#}", self.0)
+    }
+}
+
+impl std::error::Error for RetryableError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.source()
+    }
+}
+
+fn retryable_error(error: anyhow::Error) -> anyhow::Error {
+    anyhow::Error::new(RetryableError(error))
+}
+
 fn is_retryable_error(e: &anyhow::Error) -> bool {
-    if let Some(req_err) = e.downcast_ref::<reqwest::Error>() {
-        if req_err.is_timeout() || req_err.is_connect() || req_err.is_body() {
+    for cause in e.chain() {
+        if cause.downcast_ref::<RetryableError>().is_some() {
             return true;
         }
-        if let Some(status) = req_err.status() {
-            if status.is_server_error() {
+        if let Some(req_err) = cause.downcast_ref::<reqwest::Error>() {
+            if req_err.is_timeout() || req_err.is_connect() || req_err.is_body() {
                 return true;
+            }
+            if let Some(status) = req_err.status() {
+                if status.is_server_error() {
+                    return true;
+                }
             }
         }
     }
     false
+}
+
+/// S3 SDK 错误中哪些属于临时性故障：超时、连接/分发失败、响应异常，以及 5xx。
+///
+/// 4xx（404 / 403 等）保持快速失败，避免对确定性错误反复重试。
+fn is_retryable_s3_error<E>(error: &SdkError<E, aws_sdk_s3::config::http::HttpResponse>) -> bool {
+    match error {
+        SdkError::TimeoutError(_) | SdkError::DispatchFailure(_) | SdkError::ResponseError(_) => {
+            true
+        }
+        SdkError::ServiceError(inner) => inner.raw().status().is_server_error(),
+        SdkError::ConstructionFailure(_) => false,
+        _ => false,
+    }
 }
 
 /// 从 S3 下载文件（内部函数，返回 Result）。
@@ -234,6 +278,7 @@ async fn download_from_s3(object_name: &str, output_dir: &str) -> Result<()> {
         .send()
         .await
         .map_err(|error| {
+            let should_retry = is_retryable_s3_error(&error);
             let detail = format!("{error}");
             let lower = detail.to_lowercase();
             if lower.contains("notfound")
@@ -242,6 +287,8 @@ async fn download_from_s3(object_name: &str, output_dir: &str) -> Result<()> {
                 || lower.contains("404")
             {
                 anyhow!("S3 对象不存在: {object_name} ({detail})")
+            } else if should_retry {
+                retryable_error(anyhow!("S3 HEAD 请求失败: {object_name} ({detail})"))
             } else {
                 anyhow!("S3 HEAD 请求失败: {object_name} ({detail})")
             }
@@ -298,7 +345,16 @@ async fn download_from_s3(object_name: &str, output_dir: &str) -> Result<()> {
             .range(format!("bytes={}-{}", offset, end))
             .send()
             .await
-            .with_context(|| format!("S3 Range GET 失败: {}-{}", offset, end))?;
+            .map_err(|error| {
+                let should_retry = is_retryable_s3_error(&error);
+                let detail = format!("{error}");
+                let message = anyhow!("S3 Range GET 失败: {}-{} ({detail})", offset, end);
+                if should_retry {
+                    retryable_error(message)
+                } else {
+                    message
+                }
+            })?;
 
         let mut stream = response.body.into_async_read();
         let mut buffer = [0u8; 8192];
@@ -307,7 +363,22 @@ async fn download_from_s3(object_name: &str, output_dir: &str) -> Result<()> {
             let n = stream
                 .read(&mut buffer)
                 .await
-                .context("读取 S3 数据流失败")?;
+                .map_err(|error| {
+                    let kind_retryable = matches!(
+                        error.kind(),
+                        std::io::ErrorKind::TimedOut
+                            | std::io::ErrorKind::ConnectionReset
+                            | std::io::ErrorKind::ConnectionAborted
+                            | std::io::ErrorKind::BrokenPipe
+                            | std::io::ErrorKind::UnexpectedEof
+                    );
+                    let error = anyhow::Error::new(error).context("读取 S3 数据流失败");
+                    if kind_retryable {
+                        retryable_error(error)
+                    } else {
+                        error
+                    }
+                })?;
             if n == 0 {
                 break;
             }
@@ -365,7 +436,13 @@ async fn download_from_http(url: &str, output_dir: &str) -> Result<()> {
         .context("HTTP 请求失败")?;
 
     if !response.status().is_success() {
-        return Err(anyhow!("HTTP 错误状态码: {}", response.status()));
+        let status = response.status();
+        let error = anyhow!("HTTP 错误状态码: {status}");
+        return Err(if status.is_server_error() {
+            retryable_error(error)
+        } else {
+            error
+        });
     }
 
     let total_size = response.content_length().unwrap_or(0);
@@ -422,4 +499,20 @@ async fn download_from_http(url: &str, output_dir: &str) -> Result<()> {
 
     println!("  下载完成: {}", dest_path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retryable_marker_survives_context() {
+        let error = retryable_error(anyhow!("service error")).context("S3 HEAD 请求失败");
+        assert!(is_retryable_error(&error));
+    }
+
+    #[test]
+    fn plain_error_is_not_retryable() {
+        assert!(!is_retryable_error(&anyhow!("plain failure")));
+    }
 }

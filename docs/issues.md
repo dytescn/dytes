@@ -1,7 +1,7 @@
 # dytes 已知问题
 
 > 记录实际使用中遇到的阻塞问题、复现方式与修复方向。
-> 最近更新：2026-11-27（同步 GitHub #35 / #36 并记录 I-20 / I-21；两个问题均已修复并通过单元测试，待发布：I-20 symlink 失败回退包装脚本 / 复制；I-21 引入 RetryableError 标记修复 S3 重试判定；核对线上状态：#33 / #34 / #35 / #36 open，#23–#32 均 closed，其中 #31 为测试 issue）
+> 最近更新：2026-11-27（同步 GitHub #35 / #36 并记录 I-20 / I-21；两个问题均已修复并随 0.2.27 发布：I-20 symlink 失败回退包装脚本 / 复制；I-21 引入 RetryableError 标记修复 S3 重试判定；核对线上状态：#33 / #34 / #35 / #36 open，#23–#32 均 closed，其中 #31 为测试 issue）
 
 ---
 
@@ -1107,7 +1107,7 @@ issue 提到 Piksel 侧发布配置问题已同步到 `dytescn/Piksel`。本次�
 **发现日期**：2026-11-27（GitHub #35）
 **影响版本**：0.2.26（Linux；安装目录位于 exFAT / FAT32）
 **严重程度**：P1 —— 安装目录放在 exFAT / FAT32 移动硬盘的用户无法完成安装或更新
-**状态**：已修复（代码已提交，待下一个版本发布）：符号链接失败时依次回退为 shell 包装脚本、复制；chmod 失败不再中断安装。
+**状态**：已修复（0.2.27 发布）：符号链接失败时依次回退为 shell 包装脚本、复制；chmod 失败不再中断安装。
 
 ### 1. 现象
 
@@ -1161,8 +1161,7 @@ exFAT / FAT32 不支持符号链接，`symlink(2)` 返回 `EPERM`。该错误被
 
 ### 5. 备注
 
-GitHub issue：<https://github.com/dytescn/dytes/issues/35>。已修复并通过
-`cargo test --lib`，待下一个版本发布。
+GitHub issue：<https://github.com/dytescn/dytes/issues/35>。已修复并随 0.2.27 发布。
 
 ---
 
@@ -1171,7 +1170,7 @@ GitHub issue：<https://github.com/dytescn/dytes/issues/35>。已修复并通过
 **发现日期**：2026-11-27（GitHub #36）
 **影响版本**：0.2.26（Linux）
 **严重程度**：P1 —— 临时网络抖动 / 服务端 5xx 会直接导致安装与更新失败
-**状态**：已修复（代码已提交，待下一个版本发布）：新增 `RetryableError` 标记，并按 `SdkError` 类型分类可重试错误。
+**状态**：已修复（0.2.27 发布）：新增 `RetryableError` 标记，并按 `SdkError` 类型分类可重试错误。
 
 ### 1. 现象
 
@@ -1240,5 +1239,4 @@ fn is_retryable_error(e: &anyhow::Error) -> bool {
 
 ### 5. 备注
 
-GitHub issue：<https://github.com/dytescn/dytes/issues/36>。已修复并通过
-`cargo test --lib`，待下一个版本发布。
+GitHub issue：<https://github.com/dytescn/dytes/issues/36>。已修复并随 0.2.27 发布。

@@ -1,7 +1,7 @@
 # dytes 已知问题
 
 > 记录实际使用中遇到的阻塞问题、复现方式与修复方向。
-> 最近更新：2026-11-25（同步 GitHub #34 并记录 I-19：安装器 / 更新器硬编码 `app/<name>/dytes.json`，`type: core` 的应用无法安装与升级；核对线上状态：#33 已修复但 issue 仍未关闭，#34 open，#23–#30、#32 仍为 closed）
+> 最近更新：2026-11-27（同步 GitHub #35 / #36 并记录 I-20：exFAT 上创建命令入口的 symlink 返回 EPERM，install/update 中断；I-21：S3 下载错误被 anyhow 字符串化，`is_retryable_error` 失效，10 次重试实际只执行 1 次；核对线上状态：#33 / #34 / #35 / #36 open，#23–#32 均 closed，其中 #31 为测试 issue）
 
 ---
 
@@ -1099,3 +1099,130 @@ Piksel 1.1.34 把 `dytes.json` 的 `type` 从 `app` 改为 `core`，发布路径
 
 issue 提到 Piksel 侧发布配置问题已同步到 `dytescn/Piksel`。本次仅同步记录与
 线上核实，未修改代码。
+
+---
+
+## I-20 GitHub #35：exFAT/FAT32 上 symlink 返回 EPERM，install / update 在创建命令入口时中断
+
+**发现日期**：2026-11-27（GitHub #35）
+**影响版本**：0.2.26（Linux；安装目录位于 exFAT / FAT32）
+**严重程度**：P1 —— 安装目录放在 exFAT / FAT32 移动硬盘的用户无法完成安装或更新
+**状态**：未修复（2026-11-27 核对 0.2.26 源码：`src/update/executable.rs:35` 仍直接调用 `symlink` 并把错误向上传播）
+
+### 1. 现象
+
+安装目录位于 exFAT 移动硬盘（`/media/funx/dytes`，挂载参数
+`rw,nosuid,nodev,relatime,uid=1000,gid=1000,fmask=0022,dmask=0022`）时，
+`dytes install core piksel` 的下载与校验都成功，但在创建无后缀命令入口时失败：
+
+```text
+  下载完成: /media/funx/dytes/cyctron.bin
+  校验通过: cyctron.bin (6756b3e2...)
+安装失败: 创建命令入口失败: /media/funx/dytes/cyctron: Operation not permitted (os error 1)
+```
+
+改用 `dytes install core piksel --gui` 后，Piksel 自身更新和 cyctron 依赖更新仍然失败；
+最终 `piksel.bin`、`cyctron.bin` 虽已落盘，但没有 `piksel` / `cyctron` 命令入口，
+安装被判定为失败。
+
+### 2. 原因
+
+`src/update/executable.rs:25` 的 `install_command_alias` 在 Unix 上统一创建符号链接：
+
+```rust
+// src/update/executable.rs:35
+std::os::unix::fs::symlink(&target, &link)
+    .with_context(|| format!("创建命令入口失败: {}", link.display()))?;
+```
+
+exFAT / FAT32 不支持符号链接，`symlink(2)` 返回 `EPERM`。该错误被当作致命错误
+向上传播，`install` / `update` 因此中断，尽管产物已经下载并通过校验。
+
+### 3. 影响
+
+- 所有把安装目录放在 exFAT / FAT32 移动硬盘上的 Linux 用户都无法完成安装或更新；
+- 与 Piksel #4「移动硬盘（exFAT）安装场景」直接相关。
+
+### 4. 修复建议
+
+- `symlink` 失败时按文件系统能力回退：符号链接 → shell 包装脚本
+  （`#!/bin/sh` + `exec "$(dirname "$0")/cyctron.bin" "$@"`）→ 复制，随后 `chmod 755`；
+- 或启动时用 `statfs` 的 `f_type` 识别 exFAT / FAT32，直接跳过符号链接；
+- 至少把「命令入口创建失败」降级为警告并继续，最后汇总提示，而不是中断整个安装；
+- 增加 exFAT / FAT32 集成测试（loop 挂载镜像即可）。
+
+### 5. 备注
+
+GitHub issue：<https://github.com/dytescn/dytes/issues/35>。本次仅同步记录，未修改代码。
+
+---
+
+## I-21 GitHub #36：S3 下载错误被 anyhow 字符串化，重试判定失效，10 次重试实际只执行 1 次
+
+**发现日期**：2026-11-27（GitHub #36）
+**影响版本**：0.2.26（Linux）
+**严重程度**：P1 —— 临时网络抖动 / 服务端 5xx 会直接导致安装与更新失败
+**状态**：未修复（2026-11-27 核对 0.2.26 源码：`is_retryable_error` 只识别 `reqwest::Error`，S3 HEAD 错误已被格式化为字符串）
+
+### 1. 现象
+
+更新系统库 `designsoft` 时 S3 HEAD 返回 service error，日志显示“尝试 1/10”后立即
+“下载最终失败”，没有任何重试：
+
+```text
+  从 S3 下载: system/designsoft/1.0.2/designsoft.so
+  下载失败 (尝试 1/10): S3 HEAD 请求失败: system/designsoft/1.0.2/designsoft.so (service error)
+  下载最终失败: S3 HEAD 请求失败: system/designsoft/1.0.2/designsoft.so (service error)
+```
+
+### 2. 原因
+
+`src/update/loader.rs:208` 的 `is_retryable_error` 只识别保留了原始类型的
+`reqwest::Error`：
+
+```rust
+fn is_retryable_error(e: &anyhow::Error) -> bool {
+    if let Some(req_err) = e.downcast_ref::<reqwest::Error>() {
+        if req_err.is_timeout() || req_err.is_connect() || req_err.is_body() {
+            return true;
+        }
+        if let Some(status) = req_err.status() {
+            if status.is_server_error() {
+                return true;
+            }
+        }
+    }
+    false
+}
+```
+
+但 `download_from_s3` 在 `head_object().send()` 失败时先 `format!` 再 `anyhow!`，
+把原始错误转成了字符串（`src/update/loader.rs:236-249`）：
+
+```rust
+.map_err(|error| {
+    let detail = format!("{error}");
+    ...
+    anyhow!("S3 HEAD 请求失败: {object_name} ({detail})")
+})?;
+```
+
+类型信息丢失后，`downcast_ref::<reqwest::Error>()` 永远返回 `None`，所有 S3 错误都被
+判为不可重试，循环在第一次失败后 `break`，`MAX_RETRIES = 10`
+（`src/update/loader.rs:173`）实际只执行 1 次。
+
+### 3. 影响
+
+短暂网络抖动或服务端 5xx 会直接导致安装 / 更新失败，与“10 次重试”的设计预期不符，
+也掩盖了真实的临时性故障。
+
+### 4. 修复建议
+
+- 保留原始错误类型：`anyhow::Error::new(error).context(format!("S3 HEAD 请求失败: {object_name}"))`；
+- 或定义带 `retryable` 标记的错误类型，在 `is_retryable_error` 中直接读取；
+- S3 5xx / 超时 / 连接失败明确可重试，404 / NoSuchKey 快速失败；
+- 增加单测：分别构造 `reqwest` 超时错误和字符串化错误，断言重试判定结果。
+
+### 5. 备注
+
+GitHub issue：<https://github.com/dytescn/dytes/issues/36>。本次仅同步记录，未修改代码。

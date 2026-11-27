@@ -58,13 +58,14 @@ tests/
 - 新增同类文件时直接建在 `.github/workflows/`；不要先放根目录“方便验证/
   引用”再移动。
 - 仓库根目录只保留构建与包清单相关文件（`Cargo.toml`、`Cargo.lock`、
-  `dytes.json`、`build.rs` 等），不出现发布或 CI 配置文件。
+  `dytes.json`、`build.rs` 等），不出现发布或 CI 配置文件。唯一例外是
+  GitHub 硬性要求放在根目录的 composite Action 定义 `action.yml`。
 - 文档、示例与脚本提到这些文件时，路径一律写完整路径（如
   `.github/workflows/release.yml`）。
 - `.github/workflows/` 只放 workflow 定义：该目录下所有 `*.yml` 都会被
   GitHub 当作 workflow 解析，composite Action 定义放在这里会被报为无效
-  workflow。本仓库不维护 Action 定义；需要执行 dytes 时，在调用方
-  workflow 中直接下载发布二进制（见 [../docs/action.md](../docs/action.md)）。
+  workflow。本仓库的 Action 定义固定在根目录 `action.yml`，调用方通过
+  `uses: dytescn/dytes@vX.Y.Z` 引用（见 [../docs/action.md](../docs/action.md)）。
 
 正确：
 

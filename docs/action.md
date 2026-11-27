@@ -1,12 +1,18 @@
 # GitHub Action
 
-> **规范**：发布与 CI 文件统一放在 `.github/workflows/`，不得放在仓库根目录
-> （见 [skills/code.md](../skills/code.md) 3.3）。该目录只放 workflow 定义；
-> 本仓库不维护 composite Action 定义，因此 `uses: dytescn/dytes@vX.Y.Z`
-> 的引用方式不可用。
+本仓库在根目录提供 composite Action（`action.yml`），可在任意 workflow 中
+通过 `uses: dytescn/dytes@vX.Y.Z` 调用 `dytes` 子命令。Action 会按自身 tag
+下载对应 release 资产：
 
-发布流程会构建 Linux 无 GUI 的 `dytes-action.bin`。需要在 workflow 中执行
-dytes 时，直接下载该资产并调用子命令，无需在包仓库里编译或提交 `dytes`。
+| runner | 资产 |
+| --- | --- |
+| Linux | `dytes-action.bin`（无 GUI） |
+| Windows | `dytes-windows.exe` |
+| macOS | `dytes-macos.bin` |
+
+> 根目录 `action.yml` 是 GitHub 对 composite Action 的硬性要求，属于
+> [skills/code.md](../skills/code.md) 3.3 的例外；其余发布与 CI 文件仍必须
+> 放在 `.github/workflows/`。
 
 ## 1. 用法
 
@@ -23,40 +29,50 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download dytes
-        env:
-          DYTES_VERSION: v0.2.22
-        run: |
-          set -euo pipefail
-          mkdir -p "${RUNNER_TEMP}/dytes-bin"
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
-            "https://github.com/dytescn/dytes/releases/download/${DYTES_VERSION}/dytes-action.bin" \
-            -o "${RUNNER_TEMP}/dytes-bin/dytes"
-          chmod +x "${RUNNER_TEMP}/dytes-bin/dytes"
-          echo "${RUNNER_TEMP}/dytes-bin" >> "${GITHUB_PATH}"
+      - name: Check package
+        uses: dytescn/dytes@v0.2.28
+        with:
+          command: check
+          dir: .
 
       - name: Publish
-        run: dytes publish
+        uses: dytescn/dytes@v0.2.28
+        with:
+          command: publish
+          dir: .
 ```
 
-发布资产统一使用平台后缀：Windows 为 `.exe`，Linux 为 `.bin`，macOS 为 `.app`。
-`dytes-action.bin` 是无 GUI 的 Linux 构建，只支持 `ubuntu-latest`（或兼容的
-Linux runner）；不支持 `install --gui` / `update --gui`。
+输入：
+
+| 输入 | 默认值 | 说明 |
+| --- | --- | --- |
+| `command` | `publish` | `check` / `publish` / `test` / `install` / `update` / `init` / `config` |
+| `args` | 空 | 附加参数，如 `--dry-run`、`--force` |
+| `dir` | `.` | 包目录（相对 `GITHUB_WORKSPACE`） |
+| `version` | Action 的 ref | 显式指定 dytes 版本（`vX.Y.Z`）；使用 `@main` 等非版本 ref 时必须显式传入 |
 
 ## 2. 示例
 
 只预览、不上传：
 
 ```yaml
-      - run: dytes publish --dry-run
+      - name: Preview
+        uses: dytescn/dytes@v0.2.28
+        with:
+          command: publish
+          args: --dry-run
+          dir: workspace_ui
 ```
 
-**多平台发布**：一个 job 只跑 Linux。需要发布 Windows / macOS 产物时，
-应在对应平台的打包流程中直接使用发布版 `dytes`（或自建 workflow），
-不要用同一个 job 跨平台发布。
+**多平台发布**：一个 job 只跑一个平台。需要发布 Windows / macOS 产物时，
+应在对应平台的打包流程中分别发布，不要用同一个 job 跨平台发布。
 
 ```yaml
-      - run: dytes publish --platform linux
+      - name: Publish Linux
+        uses: dytescn/dytes@v0.2.28
+        with:
+          command: publish
+          args: --platform linux
 ```
 
 包的 `dytes.json` 需为每个平台声明 `platform-exports`，产物会上传到
@@ -65,14 +81,16 @@ Linux runner）；不支持 `install --gui` / `update --gui`。
 ## 3. 凭证
 
 发布产物在构建时已内置官方 S3 凭据（端点 `https://s3.api.upyun.com`、桶
-`packages`），下载 `dytes-action.bin` 后可直接 `dytes publish`，发布官方仓库的
-其它库无需额外配置。
+`packages`），下载后可直接 `dytes publish`，发布官方仓库的其它库无需额外配置。
 
-优先级：环境变量 > `dytes config` 用户配置 > 构建内置值。需要独立凭证时：
+优先级：环境变量 > `dytes config` 用户配置 > 构建内置值。需要独立凭证时，
+在 `uses` 步骤上设置环境变量：
 
 ```yaml
       - name: Publish
-        run: dytes publish
+        uses: dytescn/dytes@v0.2.28
+        with:
+          command: publish
         env:
           DYTES_S3_ENDPOINT: ${{ secrets.UPYUN_ENDPOINT }}
           DYTES_S3_BUCKET: ${{ secrets.UPYUN_BUCKET }}
@@ -80,20 +98,21 @@ Linux runner）；不支持 `install --gui` / `update --gui`。
           DYTES_S3_SECRET_KEY: ${{ secrets.UPYUN_API_SECRET }}
 ```
 
-## 4. 发布资产
+## 4. 直接下载（不使用 Action）
 
-发布流程专门构建的无 GUI 资产：
+不能使用 composite Action 的环境（例如需要固定二进制的脚本）可以直接下载
+发布资产：
 
-```text
-https://github.com/dytescn/dytes/releases/download/vX.Y.Z/dytes-action.bin
+```bash
+mkdir -p "${RUNNER_TEMP}/dytes-bin"
+curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 \
+  "https://github.com/dytescn/dytes/releases/download/vX.Y.Z/dytes-action.bin" \
+  -o "${RUNNER_TEMP}/dytes-bin/dytes"
+chmod +x "${RUNNER_TEMP}/dytes-bin/dytes"
+export PATH="${RUNNER_TEMP}/dytes-bin:${PATH}"
+dytes publish
 ```
 
-该资产与三个带 GUI 的发布资产（`dytes-windows.exe`、`dytes-linux.bin`、
-`dytes-macos.app`）一起由 release workflow 构建，但只上传到 GitHub Release，
-不写入 S3 自更新清单。引用旧版本 tag 时如果该资产不存在，请升级到包含
-`dytes-action.bin` 的版本。
-
-## 5. 不提供 Marketplace Action
-
-本仓库不发布 composite Action，也不提供 `uses: dytescn/dytes@vX.Y.Z` 的引用
-方式。不要为了 `uses:` 引用把发布或 CI 文件移回仓库根目录。
+`dytes-action.bin` 是无 GUI 的 Linux 构建，只支持 `ubuntu-latest`（或兼容的
+Linux runner）；不支持 `install --gui` / `update --gui`。它只上传到 GitHub
+Release，不写入 S3 自更新清单。

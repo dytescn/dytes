@@ -386,12 +386,6 @@ pub(crate) async fn install_dependencies_for(config: &DytesConfig) -> Result<()>
     install_dependencies(config, true).await
 }
 
-/// 为 `dytes test` 安装依赖：与 `install_dependencies_for` 相同，但不执行
-/// 依赖包的 init 脚本，避免测试环境产生安装副作用。
-pub(crate) async fn install_dependencies_only(config: &DytesConfig) -> Result<()> {
-    install_dependencies(config, false).await
-}
-
 async fn install_dependencies(config: &DytesConfig, run_init: bool) -> Result<()> {
     let plan = plan_dependencies(config, true).await?;
     for warning in &plan.warnings {

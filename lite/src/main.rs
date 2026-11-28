@@ -4,9 +4,7 @@ use clap::{Parser, Subcommand};
 
 use dytes::init::InitArgs;
 use dytes::install::cli::InstallArgs;
-use dytes::publish::cli::{CheckArgs, PublishArgs};
 use dytes::setup::SetupArgs;
-use dytes::test::TestArgs;
 use dytes::update::cli::{SelfUpdateArgs, UpdateArgs};
 use dytes::utils::config::ConfigArgs;
 use dytes::utils::error::Result;
@@ -30,12 +28,6 @@ enum Commands {
     Update(UpdateArgs),
     /// 更新 dytes CLI 自身
     SelfUpdate(SelfUpdateArgs),
-    /// 发布当前包
-    Publish(PublishArgs),
-    /// 校验包清单（设计插件会执行完整规则）
-    Check(CheckArgs),
-    /// 本地包自检、构建测试环境并离线演练安装
-    Test(TestArgs),
     /// 初始化 dytes.json
     Init(InitArgs),
     /// 管理 S3 凭证与工具配置
@@ -63,9 +55,6 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Install(args) => dytes::install::cli::run(args),
         Commands::Update(args) => dytes::update::cli::run(args),
         Commands::SelfUpdate(args) => dytes::update::cli::run_self_update(args),
-        Commands::Publish(args) => dytes::publish::cli::run(args),
-        Commands::Check(args) => dytes::publish::cli::run_check(args),
-        Commands::Test(args) => dytes::test::run(args),
         Commands::Init(args) => dytes::init::run(args),
         Commands::Config(args) => dytes::utils::config::run(args),
         Commands::Setup(args) => dytes::setup::run_cli(args),

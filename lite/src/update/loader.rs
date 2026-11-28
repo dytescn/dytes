@@ -1,13 +1,12 @@
 use crate::utils::s3;
 use anyhow::{anyhow, Context, Result};
-use aws_sdk_s3::error::SdkError;
 use futures_util::StreamExt;
 use reqwest;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::fs::{create_dir_all, File, OpenOptions};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::time::sleep;
 
 /// 判断是否为 S3 对象路径（相对路径，且以已知包目录开头）
@@ -87,19 +86,9 @@ pub async fn fetch_text(path_or_url: &str) -> Result<String> {
 }
 
 async fn fetch_s3_text(object_name: &str) -> Result<String> {
-    let client = s3::client().await;
-
-    let response = client
-        .get_object()
-        .bucket(s3::bucket())
-        .key(object_name)
-        .send()
+    s3::get_text(object_name)
         .await
-        .with_context(|| format!("S3 对象读取失败: {}", object_name))?;
-
-    let bytes = response.body.collect().await.context("读取 S3 响应失败")?;
-    String::from_utf8(bytes.into_bytes().to_vec())
-        .with_context(|| format!("{} 不是有效的 UTF-8 文本", object_name))
+        .with_context(|| format!("S3 对象读取失败: {}", object_name))
 }
 
 async fn fetch_http_text(url: &str) -> Result<String> {
@@ -123,41 +112,13 @@ async fn fetch_http_text(url: &str) -> Result<String> {
     response.text().await.context("读取 HTTP 响应失败")
 }
 
-/// 列出 S3 指定前缀下的对象 key
+/// 列出 S3 前缀下的对象（Lite 只读客户端未实现 ListObjectsV2）。
+///
+/// `update --discover` 会优先读 `packages.json`；只有索引缺失时才会走到这里。
 pub async fn list_keys(prefix: &str) -> Result<Vec<String>, String> {
-    s3::ensure_credentials()?;
-    let client = s3::client().await;
-    let mut keys = Vec::new();
-    let mut continuation: Option<String> = None;
-
-    loop {
-        let mut req = client.list_objects_v2().bucket(s3::bucket()).prefix(prefix);
-        if let Some(token) = &continuation {
-            req = req.continuation_token(token.clone());
-        }
-
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| format!("ListObjectsV2 {} 失败: {}", prefix, e))?;
-
-        for obj in resp.contents() {
-            if let Some(key) = obj.key() {
-                keys.push(key.to_string());
-            }
-        }
-
-        if resp.is_truncated().unwrap_or(false) {
-            continuation = resp.next_continuation_token().map(|s| s.to_string());
-            if continuation.is_none() {
-                break;
-            }
-        } else {
-            break;
-        }
-    }
-
-    Ok(keys)
+    Err(format!(
+        "Lite 版本不支持列举对象（{prefix}）；请使用 packages.json 索引"
+    ))
 }
 
 /// 下载文件（公共入口，自动识别 S3 或 HTTP，并带有重试）
@@ -232,7 +193,9 @@ fn retryable_error(error: anyhow::Error) -> anyhow::Error {
 
 fn is_retryable_error(e: &anyhow::Error) -> bool {
     for cause in e.chain() {
-        if cause.downcast_ref::<RetryableError>().is_some() {
+        if cause.downcast_ref::<RetryableError>().is_some()
+            || cause.downcast_ref::<s3::RetryableError>().is_some()
+        {
             return true;
         }
         if let Some(req_err) = cause.downcast_ref::<reqwest::Error>() {
@@ -249,51 +212,22 @@ fn is_retryable_error(e: &anyhow::Error) -> bool {
     false
 }
 
-/// S3 SDK 错误中哪些属于临时性故障：超时、连接/分发失败、响应异常，以及 5xx。
-///
-/// 4xx（404 / 403 等）保持快速失败，避免对确定性错误反复重试。
-fn is_retryable_s3_error<E>(error: &SdkError<E, aws_sdk_s3::config::http::HttpResponse>) -> bool {
-    match error {
-        SdkError::TimeoutError(_) | SdkError::DispatchFailure(_) | SdkError::ResponseError(_) => {
-            true
-        }
-        SdkError::ServiceError(inner) => inner.raw().status().is_server_error(),
-        SdkError::ConstructionFailure(_) => false,
-        _ => false,
-    }
-}
-
 /// 从 S3 下载文件（内部函数，返回 Result）。
 /// 按 32 MB 分块下载，支持 .part 断点续传，避免单个长连接中断导致全量重下。
 async fn download_from_s3(object_name: &str, output_dir: &str) -> Result<()> {
     println!("  从 S3 下载: {}", object_name);
 
     s3::ensure_credentials().map_err(|hint| anyhow!("S3 下载失败: {object_name}（{hint}）"))?;
-    let client = s3::client().await;
 
-    let head = client
-        .head_object()
-        .bucket(s3::bucket())
-        .key(object_name)
-        .send()
+    let total_size = s3::head_size(object_name)
         .await
         .map_err(|error| {
-            let should_retry = is_retryable_s3_error(&error);
-            let detail = format!("{error}");
-            let lower = detail.to_lowercase();
-            if lower.contains("notfound")
-                || lower.contains("no such key")
-                || lower.contains("nosuchkey")
-                || lower.contains("404")
-            {
-                anyhow!("S3 对象不存在: {object_name} ({detail})")
-            } else if should_retry {
-                retryable_error(anyhow!("S3 HEAD 请求失败: {object_name} ({detail})"))
+            if is_retryable_error(&error) {
+                retryable_error(error).context(format!("S3 HEAD 请求失败: {object_name}"))
             } else {
-                anyhow!("S3 HEAD 请求失败: {object_name} ({detail})")
+                error.context(format!("S3 HEAD 请求失败: {object_name}"))
             }
         })?;
-    let total_size = head.content_length().unwrap_or(0) as u64;
     if total_size == 0 {
         return Err(anyhow!("S3 对象大小为 0，可能无效"));
     }
@@ -338,54 +272,36 @@ async fn download_from_s3(object_name: &str, output_dir: &str) -> Result<()> {
     const CHUNK_SIZE: u64 = 32 * 1024 * 1024;
     while offset < total_size {
         let end = std::cmp::min(offset + CHUNK_SIZE - 1, total_size - 1);
-        let response = client
-            .get_object()
-            .bucket(s3::bucket())
-            .key(object_name)
-            .range(format!("bytes={}-{}", offset, end))
-            .send()
+        let response = s3::get_range(object_name, offset, end)
             .await
             .map_err(|error| {
-                let should_retry = is_retryable_s3_error(&error);
-                let detail = format!("{error}");
-                let message = anyhow!("S3 Range GET 失败: {}-{} ({detail})", offset, end);
-                if should_retry {
+                let message = error.context(format!("S3 Range GET 失败: {offset}-{end}"));
+                if is_retryable_error(&message) {
                     retryable_error(message)
                 } else {
                     message
                 }
             })?;
 
-        let mut stream = response.body.into_async_read();
-        let mut buffer = [0u8; 8192];
+        let mut stream = response.bytes_stream();
         let mut chunk_written: u64 = 0;
-        loop {
-            let n = stream
-                .read(&mut buffer)
-                .await
-                .map_err(|error| {
-                    let kind_retryable = matches!(
-                        error.kind(),
-                        std::io::ErrorKind::TimedOut
-                            | std::io::ErrorKind::ConnectionReset
-                            | std::io::ErrorKind::ConnectionAborted
-                            | std::io::ErrorKind::BrokenPipe
-                            | std::io::ErrorKind::UnexpectedEof
-                    );
-                    let error = anyhow::Error::new(error).context("读取 S3 数据流失败");
-                    if kind_retryable {
-                        retryable_error(error)
-                    } else {
-                        error
-                    }
-                })?;
-            if n == 0 {
+        while let Some(chunk) = stream.next().await {
+            let bytes = chunk.map_err(|error| {
+                let should_retry = error.is_timeout() || error.is_connect() || error.is_body();
+                let error = anyhow::Error::new(error).context("读取 S3 数据流失败");
+                if should_retry {
+                    retryable_error(error)
+                } else {
+                    error
+                }
+            })?;
+            if bytes.is_empty() {
                 break;
             }
-            file.write_all(&buffer[..n])
+            file.write_all(&bytes)
                 .await
                 .context("写入临时文件失败")?;
-            chunk_written += n as u64;
+            chunk_written += bytes.len() as u64;
         }
         if chunk_written == 0 {
             file.flush().await?;

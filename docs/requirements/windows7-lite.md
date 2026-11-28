@@ -1,6 +1,6 @@
 # 需求：Windows 7 兼容的 Lite 版本
 
-**状态**：方案评估（2026-11-28），待评审
+**状态**：方案评估 + **S0 spike 已验证**（2026-11-28，见第 9 节），全量实现待评审
 **关联**：[issues.md](../issues.md) I-22、[packaging.md](../packaging.md)、
 [windows-installer.md](windows-installer.md)
 
@@ -171,3 +171,48 @@ combase/WinRT 调用”。** 只降工具链或只去 GUI 都不够。
 | W3 | TLS 用 ring 还是继续 aws-lc-rs | ring（Win7 风险低） |
 | W4 | Lite 是否用 rustc 1.77 独立构建，还是把 Win7 作为完整版的长期分支 | 独立构建，避免拖累主版本 |
 | W5 | 是否先做 S0 spike 再决定 | 建议先做 spike |
+
+## 9. S0 spike 结果（2026-11-28）
+
+分支：`spike/win7-lite`（提交 `d1effa7`），workflow `Win7 Lite spike`
+（[run 46115877820](https://github.com/dytescn/dytes/actions/runs/46115877820)）。
+两个独立 crate 在 Windows runner 上构建，并用 `dumpbin /imports` 检查
+`ProcessPrng` / `WaitOnAddress` / `WakeByAddressSingle` /
+`GetSystemTimePreciseAsFileTime` / `RoOriginateErrorW` / `combase.dll`。
+
+| crate | 依赖 | rustc 1.77.0 | 导入表 |
+| --- | --- | --- | --- |
+| `spike/win7-min` | `windows-sys 0.52` + clap / serde / chrono / uuid / toml / sha2 / anyhow / dirs / semver / libloading / futures-util / rpassword | 构建成功 | **WIN7_CLEAN** |
+| `spike/win7-http` | `reqwest 0.12.5` + `tokio 1.38.1` + native-tls（Windows SChannel） | 构建成功 | **WIN7_CLEAN** |
+
+`rustc 1.76.0` 的两个 job 失败，原因是 crate 声明了 `rust-version = "1.77"`，
+不是依赖不兼容；1.77 是官方最后支持 Win7 的稳定版，已满足要求。
+
+### 9.1 验证到的降级经验（实现时必须遵守）
+
+1. `Cargo.lock` 必须是 **version 3**：1.77 的 Cargo 无法解析 v4；
+2. 2026 年的传递依赖会引入 `edition2024`（例如 `indexmap 2.14.2` 直接报
+   “feature `edition2024` is required”）；
+3. 用 MSRV-aware resolver 生成 lock：
+   `CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=fallback cargo +nightly generate-lockfile`，
+   可把大量依赖自动降到 1.77 兼容版本（生成的 lock 为 v3）；
+4. `toml 0.8.14 / 0.8.19` 与新版 `toml_edit 0.22.27` 不兼容
+   （`E0599: no method named serialize_field`），需
+   `cargo update -p toml_edit --precise 0.22.20`；
+5. `native-tls`（Windows SChannel）在 Win7 导入表中干净，可作为 Lite 的 TLS 后端；
+   完整版继续使用现有 rustls/aws-lc 不受影响。
+
+### 9.2 剩余阻塞
+
+| 阻塞 | 说明 | 解决 |
+| --- | --- | --- |
+| `slint-build` 是无条件 build-dependency | 即使不启用 `gui`，1.77 构建 Lite 时仍会编译 `slint-build 1.16`（MSRV 1.92） | 预生成 Slint 代码并提交，或拆 `dytes-gui` crate（第 4.1 节） |
+| 现有代码适配 | `is_none_or` 4 处；`windows` crate → `windows-sys` 3 个文件；`lite` feature 裁剪 | 第 4.3 节 |
+| S3 只读客户端 | Lite 需要 `GET` / `HEAD` + SigV4，替代 `aws-sdk-s3` | 第 4.3 节，新增约 300–500 行 |
+| Win7 实机验证 | CI 只验证导入表，不验证运行 | Windows 7 SP1 x64 虚拟机 / 实机 |
+
+### 9.3 结论
+
+**工具链与依赖层已证明可行**：1.77 + `windows-sys` + `reqwest/tokio/native-tls`
+可以生成不导入 Win8/10-only API 的 PE。剩余工作是 GUI 构建解耦、现有代码适配、
+S3 只读客户端与实机回归，估算仍需 **4–6 个工作日**（S0 已完成）。

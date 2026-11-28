@@ -30,6 +30,11 @@ jobs:
           arch: x86_64
           cache: true
 
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: lite
+
       - name: Build Lite (no GUI)
         run: cargo build --release --locked
 
@@ -68,6 +73,25 @@ jobs:
             if ($imports -match [regex]::Escape($t)) { $found += $t }
           }
           $combase = [bool]($imports -match 'combase\.dll')
-          Write-Host "win8/10-only symbols: $(if ($found.Count) { $found -join ', ' } else { 'none' })"
+          $summarySymbols = if ($found.Count) { $found -join ', ' } else { 'none' }
+          Write-Host "win8/10-only symbols: $summarySymbols"
           Write-Host "combase.dll: $combase"
           Write-Host "（仅报告，不阻断：Lite 迁移阶段先确认构建成功）"
+
+          $report = @"
+          ### Lite PE imports
+
+          | 项 | 值 |
+          | --- | --- |
+          | 产物 | $($exe.Name) |
+          | 大小 | $($exe.Length) 字节 |
+          | Win8/10-only 符号 | $summarySymbols |
+          | combase.dll | $combase |
+
+          <details><summary>dumpbin /dependents</summary>
+          <pre>
+          $deps
+          </pre>
+          </details>
+          "@
+          $report | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append

@@ -1250,10 +1250,9 @@ GitHub issue：<https://github.com/dytescn/dytes/issues/36>。已修复并随 0.
 **发现日期**：2026-11-28（GitHub #37）
 **影响版本**：0.2.28 / 0.2.29（Windows GUI 发布产物）
 **严重程度**：P1 —— 受影响的系统上任何命令（含 `dytes --version`）都无法启动
-**状态**：已定位；0.2.29 静态 CRT 后 Win7 仍失败（见 4.1）。当前处置：声明最低
-Windows 10、下载页 / 安装脚本提示，并新增**无 GUI 的 Windows Lite 产物**（面向低端
-电脑，仍是 Windows 10+）。**Win7 运行**需要 rustc ≤ 1.77 全量重建，依赖 MSRV 冲突
-较大，单独立项评估，当前不作为目标
+**状态**：已定位；0.2.29 静态 CRT 后 Win7 仍失败（见 4.1）。**Lite 已实现**：
+`lite/` 独立项目 + `Fenex/setup-rust-win7` 工具链，已移除 Win8/10-only 符号与
+`combase.dll`（CI 导入表门禁通过），发布流程已切到 `lite/`；待 Windows 7 实机验证。
 
 ### 1. 现象
 
@@ -1370,7 +1369,7 @@ PE 导入表带上这些符号后，加载器在启动阶段就失败（`0xC0000
 | B. 旧工具链重建 | 用 rustc ≤ 1.77 重新构建（并规避 WinRT / Win10 API），可同时产出无 GUI 版本 | 高 | 需锁定旧工具链、验证所有依赖的 MSRV，失去新版本修复；旧系统可用 CLI |
 | C. patch Slint | fork winit 后端，用 `GetProcAddress` 探测 `SystemParametersInfoForDpi` | 高 | **不足以解决**：std / 其它依赖的 `ProcessPrng` 等仍要求 Win10 |
 | D. 仅降级 Slint | 回退到不含该调用的版本 | 低—中 | 同样不足，且可能回退窗口 / 渲染修复 |
-| E. Windows Lite（无 GUI） | 发布不带 `gui` feature 的 `dytes-windows-lite.exe`，去掉 Slint 与图形依赖 | 低 | 体积更小、适合低端电脑；**仍是 Windows 10+**，不解决 Win7 |
+| E. Windows Lite（无 GUI） | `lite/` 独立项目 + rust-win7 工具链，去掉 Slint / aws-sdk / dirs / windows crate，`windows-core` 补丁到 ole32 | 中 | 已实现：导入表无 Win8/10-only 符号与 combase，8.4 MB；待 Win7 实机验证 |
 
 **决策（2026-11-28 起）**：先做 A + E —— 声明最低 Windows 10、下载页 / 脚本提示，
 并新增无 GUI 的 Windows Lite 产物；**不做 B / C / D**。Win7 运行如确有需求，

@@ -533,9 +533,13 @@ jobs:
     needs: preflight
     runs-on: windows-latest
     environment: product
-    # 面向低端电脑的无 GUI 产物：不链接 Slint / Rfd / OpenGL，体积更小。
-    # 仍要求 Windows 10+（Rust std 的 Windows 基线，见 issues.md I-22），
-    # 因此不要把它当作 Win7 兼容版。
+    # 面向低端电脑的 Lite 产物（Windows 7 兼容方向）：构建 lite/ 独立项目，
+    # 使用 Fenex/setup-rust-win7 自定义工具链（std 打过 Win7 补丁），
+    # 不链接 Slint / Rfd / OpenGL / aws-sdk / combase。
+    defaults:
+      run:
+        shell: bash
+        working-directory: lite
     env:
       UPYUN_API_KEY: ${{ secrets.UPYUN_API_KEY }}
       UPYUN_API_SECRET: ${{ secrets.UPYUN_API_SECRET }}
@@ -563,14 +567,20 @@ jobs:
             exit 1
           fi
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup rust-win7 toolchain
+        uses: Fenex/setup-rust-win7@v1
+        with:
+          version: "1.99.0-win7.1"
+          arch: x86_64
+          cache: true
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: lite
 
-      # 无 gui feature：不编译 Slint / Rfd，也不需要图形构建依赖。
-      - name: Build dytes Lite (no GUI)
+      # lite/ 无 gui feature，也不依赖 aws-sdk / dirs / windows crate。
+      - name: Build dytes Lite
         run: cargo build --release --locked
 
       - name: Prepare Lite artifact
@@ -613,11 +623,47 @@ jobs:
           " "upload/dytes-lite.exe"
           cat "upload/dytes-lite.exe.sha256"
 
+      # 发布门禁：Lite 必须不导入 Win7 缺失的符号（std / Slint / combase 等）。
+      - name: Verify Lite PE imports
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Get-ChildItem artifact/*.exe | Select-Object -First 1
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (-not (Test-Path $vswhere)) { throw '未找到 vswhere.exe' }
+          $vsPath = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          $vcTools = Get-ChildItem (Join-Path $vsPath 'VC\Tools\MSVC') -Directory |
+            Sort-Object Name -Descending | Select-Object -First 1
+          $dumpbin = Join-Path $vcTools.FullName 'bin\Hostx64\x64\dumpbin.exe'
+          if (-not (Test-Path $dumpbin)) { throw '未找到 dumpbin' }
+          $imports = (& $dumpbin '/imports' $exe.FullName | Out-String)
+
+          $targets = @(
+            'SystemParametersInfoForDpi',
+            'ProcessPrng',
+            'WaitOnAddress',
+            'WakeByAddressSingle',
+            'GetSystemTimePreciseAsFileTime',
+            'RoOriginateErrorW'
+          )
+          $found = @()
+          foreach ($t in $targets) {
+            if ($imports -match [regex]::Escape($t)) { $found += $t }
+          }
+          $combase = [bool]($imports -match 'combase\.dll')
+          Write-Host "Lite imports: size=$($exe.Length); win8_10_only=[$($found -join ', ')]; combase=$combase"
+          if ($found.Count -gt 0 -or $combase) {
+            Write-Host '::error::Lite 产物仍导入 Win7 缺失的符号'
+            exit 1
+          }
+
       - name: Upload Lite build artifact
         uses: actions/upload-artifact@v4
         with:
           name: dytes-windows-lite
-          path: artifact/
+          path: lite/artifact/
           if-no-files-found: error
 
       # Lite 只进版本化目录，不更新 latest 清单：self-update 仍指向完整版。

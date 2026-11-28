@@ -16,7 +16,7 @@
 | `build`（Linux） | `ubuntu-22.04` | 同上 | `dytes-linux.bin`（上传为 `dytes.bin`） |
 | `build`（macOS） | `macos-latest` | 同上 | `dytes-macos.bin`（上传为 `dytes.app`） |
 | `build-action`（Linux） | `ubuntu-22.04` | `cargo build --release --locked`（**无 GUI**） | `dytes-action.bin` |
-| `build-windows-lite`（Windows） | `windows-latest` | `cargo build --release --locked`（**无 GUI**） | `dytes-windows-lite.exe` |
+| `build-windows-lite`（Windows） | `windows-latest` | `cd lite && cargo build --release --locked`（**无 GUI**，rust-win7 工具链） | `dytes-windows-lite.exe` |
 
 三个 GUI 构建在编译前安装 Unix 依赖（Linux 为 `cmake ninja-build pkg-config`、
 `libxkbcommon-dev`、X11 / Wayland、EGL / GL、`libfontconfig1-dev`、
@@ -38,8 +38,12 @@
 
 Windows Lite 只上传到 `core/dytes/<version>/windows/dytes-lite.exe`（+ `.sha256`）
 并进入 GitHub Release，**不进入 `latest` 与清单**：`self-update` 始终指向完整版，
-Lite 用户升级后会得到完整版。Lite 去掉了 Slint / Rfd / OpenGL 依赖，适合低端电脑，
-但最低系统仍是 Windows 10（见 [issues.md](issues.md) I-22）。
+Lite 用户升级后会得到完整版。
+
+Lite 是独立项目 `lite/`，使用 `Fenex/setup-rust-win7`（`1.99.0-win7.1`）构建：
+去掉 Slint / Rfd / aws-sdk / dirs / windows crate，`windows-core` 用本地补丁指向
+`ole32.dll`。当前导入表已无 Win8/10-only 符号与 `combase.dll`，目标 Windows 7
+（仍需实机验证），详见 [lite/README.md](../lite/README.md)。
 
 ## 2. 各平台运行时依赖
 

@@ -22,7 +22,7 @@ Design software package management tool: a single Rust binary that installs, upd
 
 | 平台 | 最低要求 |
 | --- | --- |
-| Windows | Windows 10 及以上（产物含 Win10-only API；Windows 7 / 8.1 会在加载器阶段报 `0xC0000139`，详见 [docs/issues.md](docs/issues.md) I-22）。低配机器可用 **Windows Lite**（无 GUI） |
+| Windows | 完整版要求 Windows 10 及以上（产物含 Win10-only API，Windows 7 / 8.1 会在加载器阶段报 `0xC0000139`，详见 [docs/issues.md](docs/issues.md) I-22）。低配机器与 Win7 方向请用 **Windows Lite**（无 GUI，构建于 `lite/`，待实机验证） |
 | Linux | glibc ≥ 2.35（Ubuntu 22.04 / Debian 12 及更新）；GUI 需要 X11 或 Wayland、OpenGL、fontconfig |
 | macOS | macOS 11 及以上，universal2（Apple Silicon 与 Intel 均可运行） |
 
@@ -67,13 +67,13 @@ cargo build --release --features gui
 发布流程共 5 个构建：
 
 - Windows / Linux / macOS 三个带 GUI 的发布构建；
-- 1 个 Windows Lite（无 GUI）构建：`dytes-windows-lite.exe`，适合低端电脑，
-  不链接 Slint / OpenGL，仍要求 Windows 10+；
+- 1 个 Windows Lite（无 GUI）构建：`dytes-windows-lite.exe`，构建 `lite/` 独立项目，
+  使用 rust-win7 工具链，目标 Windows 7 兼容；不链接 Slint / OpenGL / aws-sdk；
 - 1 个 Linux 无 GUI 的 Action 构建。
 
 Lite 版本只发布到版本化目录与 GitHub Release（`core/dytes/<version>/windows/dytes-lite.exe`），
 不进入 `latest` 清单，`self-update` 仍指向完整版。`dytes setup` 与双击安装在 Lite
-版本中同样可用，只是 `install --gui` / `update --gui` 不可用。
+版本中同样可用；Lite 不提供 `publish` / `check` / `test` 与 `--gui`。
 
 各平台产物的系统依赖（glibc / VC++ 运行库 / 最低 Windows 版本 / macOS 架构）与
 降低依赖的改造方案见 [docs/packaging.md](docs/packaging.md)。

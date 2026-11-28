@@ -1,6 +1,8 @@
 # 需求：Windows 7 兼容的 Lite 版本
 
-**状态**：方案评估 + **S0 spike 已验证**（2026-11-28，见第 9 节），全量实现待评审
+**状态**：**Lite 已实现**（2026-11-28）：`lite/` 独立项目 + rust-win7 工具链、
+轻量只读 S3、windows-sys、platform_dirs、windows-core 补丁；CI 导入表门禁通过
+（无 Win8/10-only 符号与 combase），待 Windows 7 实机验证。详见第 9 节。
 **关联**：[issues.md](../issues.md) I-22、[packaging.md](../packaging.md)、
 [windows-installer.md](windows-installer.md)
 
@@ -216,3 +218,24 @@ combase/WinRT 调用”。** 只降工具链或只去 GUI 都不够。
 **工具链与依赖层已证明可行**：1.77 + `windows-sys` + `reqwest/tokio/native-tls`
 可以生成不导入 Win8/10-only API 的 PE。剩余工作是 GUI 构建解耦、现有代码适配、
 S3 只读客户端与实机回归，估算仍需 **4–6 个工作日**（S0 已完成）。
+
+### 9.4 Lite 实现结果（2026-11-28）
+
+| 项 | 结果 |
+| --- | --- |
+| 构建 | `windows-latest` + `Fenex/setup-rust-win7@v1`（1.99.0-win7.1）成功 |
+| 产物 | 8,841,216 字节（完整版约 32 MB） |
+| Win8/10-only 符号 | none |
+| `combase.dll` | False |
+| 命令范围 | install / update / self-update / config / setup / init（无 publish / check / test / --gui） |
+
+关键实现：
+
+- `lite/src/utils/s3.rs`：reqwest + SigV4 只读客户端（GET / HEAD / Range GET）；
+- `lite/src/utils/platform_dirs.rs`：环境变量目录，替代 `dirs`（去掉 `dirs-sys` 的 combase）；
+- `lite/vendor/windows-core`：`CoTaskMemAlloc` / `CoTaskMemFree` /
+  `CoCreateFreeThreadedMarshaler` → `ole32.dll`；
+- `release.yml` 的 `build-windows-lite` 已切到 `lite/` + rust-win7，并增加
+  导入表门禁（发现任一 Win7 缺失符号即失败）。
+
+剩余：Windows 7 SP1 实机运行验证；`vendor/windows-core` 升级时需重新应用补丁。

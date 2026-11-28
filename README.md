@@ -14,8 +14,17 @@ Design software package management tool: a single Rust binary that installs, upd
 | `dytes test` | 本地包自检、在线更新依赖并演练安装 |
 | `dytes init` | 初始化 `dytes.json` |
 | `dytes config` | 管理 S3 凭证与平台配置 |
+| `dytes setup` | 安装 dytes 自身（Windows：用户目录 + 用户 PATH；双击 exe 等同） |
 
 完整参数与退出码见 [docs/cmd.md](docs/cmd.md)，每个命令的详细规划见 [docs/commands/](docs/commands/README.md)。
+
+## 系统要求
+
+| 平台 | 最低要求 |
+| --- | --- |
+| Windows | Windows 10 及以上（产物含 Win10-only API；Windows 7 / 8.1 会在加载器阶段报 `0xC0000139`，详见 [docs/issues.md](docs/issues.md) I-22） |
+| Linux | glibc ≥ 2.35（Ubuntu 22.04 / Debian 12 及更新）；GUI 需要 X11 或 Wayland、OpenGL、fontconfig |
+| macOS | macOS 11 及以上，universal2（Apple Silicon 与 Intel 均可运行） |
 
 ## 快速开始
 
@@ -57,6 +66,9 @@ cargo build --release --features gui
 
 发布流程共 4 个构建：Windows / Linux / macOS 三个带 GUI 的发布构建，
 以及 1 个 Linux 无 GUI 的 Action 构建。
+
+各平台产物的系统依赖（glibc / VC++ 运行库 / 最低 Windows 版本 / macOS 架构）与
+降低依赖的改造方案见 [docs/packaging.md](docs/packaging.md)。
 
 ## 文档
 

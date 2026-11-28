@@ -167,6 +167,8 @@ jobs:
       AWS_ACCESS_KEY_ID: ${{ secrets.UPYUN_API_KEY }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.UPYUN_API_SECRET }}
       AWS_DEFAULT_REGION: us-east-1
+      # 两个 macOS 架构使用同一最低部署目标，避免 Intel 产物要求更高系统。
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
     strategy:
       fail-fast: false
       matrix:
@@ -181,7 +183,9 @@ jobs:
             binary: dytes
             artifact: dytes-linux.bin
             package: dytes.bin
-          - os: macos-latest
+          # 固定 macos-14（Apple Silicon）：先原生构建 arm64，再交叉构建 x86_64，
+          # 最后 lipo 合并为 universal2，覆盖 Intel Mac 无法运行的问题。
+          - os: macos-14
             platform: macos
             binary: dytes
             artifact: dytes-macos.bin
@@ -248,6 +252,21 @@ jobs:
       - name: Build dytes
         run: cargo build --release --locked --features gui
 
+      # macOS 发布产物合并为 universal2：arm64 原生 + x86_64 交叉编译。
+      - name: Build macOS universal binary
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup target add x86_64-apple-darwin
+          cargo build --release --locked --features gui --target x86_64-apple-darwin
+          lipo -create \
+            target/release/dytes \
+            target/x86_64-apple-darwin/release/dytes \
+            -output target/release/dytes.universal
+          mv target/release/dytes.universal target/release/dytes
+          lipo -info target/release/dytes
+
       - name: Prepare artifacts
         shell: bash
         run: |
@@ -256,6 +275,39 @@ jobs:
           cp "target/release/${{ matrix.binary }}" "upload/${{ matrix.package }}"
           cp "target/release/${{ matrix.binary }}" "artifact/${{ matrix.artifact }}"
           ls -l upload artifact
+
+      # .cargo/config.toml 为 MSVC 目标启用 +crt-static；这里直接检查产物，
+      # 防止 rustflags 未生效 / 被 RUSTFLAGS 覆盖后退化成动态 CRT。
+      - name: Verify static CRT
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $binary = 'upload/dytes.exe'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (-not (Test-Path $vswhere)) { throw "未找到 vswhere.exe: $vswhere" }
+          $vsPath = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          $vcTools = Get-ChildItem (Join-Path $vsPath 'VC\Tools\MSVC') -Directory |
+            Sort-Object Name -Descending | Select-Object -First 1
+          $dumpbin = Join-Path $vcTools.FullName 'bin\Hostx64\x64\dumpbin.exe'
+          if (-not (Test-Path $dumpbin)) { throw "未找到 dumpbin: $dumpbin" }
+
+          $deps = (& $dumpbin /dependents $binary | Out-String)
+          Write-Host $deps
+          foreach ($name in @('VCRUNTIME', 'MSVCP', 'MSVCR', 'api-ms-win-crt')) {
+            if ($deps -match [regex]::Escape($name)) {
+              throw "产物仍依赖 $name：静态 CRT 未生效（检查 .cargo/config.toml 或 RUSTFLAGS）"
+            }
+          }
+
+          # 记录（不阻断）Win10-only 导入，便于对照 issues.md I-22。
+          $imports = (& $dumpbin /imports $binary | Out-String)
+          if ($imports -match 'SystemParametersInfoForDpi') {
+            Write-Host '::warning::产物导入 user32!SystemParametersInfoForDpi（仅 Windows 10+ 提供，见 I-22）'
+          }
+          Write-Host '静态 CRT 校验通过：产物不依赖 VC++ / UCRT 运行库'
 
       # 与 build-action 一致：确认发布二进制真的内置了 S3 凭据。
       - name: Verify builtin S3 credentials
@@ -292,6 +344,29 @@ jobs:
           echo "最大 GLIBC 版本: ${max:-无}（基线 $baseline）"
           if [ -n "$max" ] && [ "$(printf '%s\n%s\n' "$max" "$baseline" | sort -V | tail -n1)" != "$baseline" ]; then
             echo "::error::产物依赖 GLIBC_$max，超过基线 $baseline；请固定 Linux 构建机或改用 manylinux 容器"
+            exit 1
+          fi
+
+      # universal2 与最低部署目标门禁：避免以后退回单架构或抬高系统要求。
+      - name: Verify macOS universal binary
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="upload/${{ matrix.package }}"
+          archs=$(lipo -archs "$binary")
+          echo "macOS 架构: $archs"
+          for arch in arm64 x86_64; do
+            if [ "${archs#*$arch}" = "$archs" ]; then
+              echo "::error::产物缺少 $arch 架构（当前: $archs）"
+              exit 1
+            fi
+          done
+          minos=$(otool -l "$binary" \
+            | awk '/LC_BUILD_VERSION/{found=1} found && /minos/{print $2; exit}')
+          echo "最低系统版本: ${minos:-未知}"
+          if [ -n "$minos" ] && [ "$(printf '%s\n11.0\n' "$minos" | sort -V | tail -n1)" != "11.0" ]; then
+            echo "::error::产物最低系统版本 $minos 高于 11.0"
             exit 1
           fi
 

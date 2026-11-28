@@ -10,6 +10,8 @@
 | [mcp-official.md](mcp-official.md) | 官方 MCP 规范（2026-07-28）摘要与差异、改造建议 |
 | [commands/](commands/README.md) | 每个子命令的详细规划与用法 |
 | [action.md](action.md) | GitHub Action 用法 |
+| [packaging.md](packaging.md) | 打包命令、各平台运行时依赖与降依赖方案 |
+| [requirements/](requirements/) | 待实现功能的需求文档 |
 | [issues.md](issues.md) | 已知问题与排查记录 |
 
 ## 开发

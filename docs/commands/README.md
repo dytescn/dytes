@@ -13,6 +13,7 @@
 | `test` | [test.md](test.md) | 本地自检、在线更新依赖并演练安装 |
 | `init` | [init.md](init.md) | 初始化 `dytes.json` |
 | `config` | [config.md](config.md) | 管理 S3 凭证与平台配置 |
+| `setup` | [setup.md](setup.md) | 安装 dytes 自身并写入用户 `PATH`（Windows） |
 | `help` | [help.md](help.md) | 帮助与版本输出 |
 
 ## 通用约定

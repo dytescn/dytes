@@ -1,0 +1,10 @@
+# Windows 发布产物静态链接 MSVC 运行库（/MT）。
+#
+# 动态 CRT（默认）会让产物依赖 vcruntime140.dll / api-ms-win-crt-*，在未安装
+# VC++ 运行库的干净系统上直接启动失败。静态 CRT 把这些代码打进 exe，代价是
+# 体积略增；aws-lc-sys 等 C 依赖会通过 target_feature=crt-static 一起切换到 /MT。
+#
+# 仅对 x86_64-pc-windows-msvc 生效，不影响 Linux / macOS 构建与
+# dytes-action.bin（Linux 无 GUI）。
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

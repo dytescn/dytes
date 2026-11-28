@@ -1,7 +1,7 @@
 # dytes 已知问题
 
 > 记录实际使用中遇到的阻塞问题、复现方式与修复方向。
-> 最近更新：2026-11-27（同步 GitHub #35 / #36 并记录 I-20 / I-21；两个问题均已修复并随 0.2.27 发布：I-20 symlink 失败回退包装脚本 / 复制；I-21 引入 RetryableError 标记修复 S3 重试判定；核对线上状态：#33 / #34 / #35 / #36 open，#23–#32 均 closed，其中 #31 为测试 issue）
+> 最近更新：2026-11-28（同步 GitHub #37 并记录 I-22；核对线上状态：#37 open，#33–#36 均 closed。I-22 由 #37 评论确认为 Windows 7 SP1 x64（退出码 0xC0000139），导入表显示 Slint 的 `SystemParametersInfoForDpi` 之外还有 Rust std / 依赖的 `ProcessPrng`、`WaitOnAddress` 等 Win10 API，装运行库无效、无 GUI 构建也无法回到 Win7；修复方向定为“声明最低 Windows 10，并由下载页 / 安装脚本提前提示”（程序自身在加载器阶段崩溃，无法自检）。打包与系统依赖现状见 [packaging.md](packaging.md)）
 
 ---
 
@@ -884,7 +884,7 @@ issue 只有标题；若实际现象是应用自身 `version` 字段未变，需
 **发现日期**：2026-11-24（GitHub #33）
 **影响版本**：0.2.22 及更早
 **严重程度**：P2 —— 纯依赖集合的 app 包无法直接发布，有命令行绕过方式
-**状态**：0.2.23 已修复 —— app 类型无导出时默认按仅清单发布；非 app 仍报错并提示 `--manifest-only`
+**状态**：0.2.23 已修复 —— app 类型无导出时默认按仅清单发布；非 app 仍报错并提示 `--manifest-only`；GitHub #33 已于 2026-11-27 关闭
 
 ### 1. 现象
 
@@ -1006,8 +1006,10 @@ $ dytes self-update --check
 **发现日期**：2026-11-25（GitHub #34）
 **影响版本**：0.2.25（Linux）；Piksel 1.1.32 → 1.1.34 升级
 **严重程度**：P1 —— 默认应用（Piksel）的安装 / 升级链路在发布类型改为 `core` 后断链
-**状态**：未修复（2026-11-25 核对 0.2.25 源码与线上分发源：属于 Piksel 迁移 `app` →
-`core` 时的遗留——旧 `app/` 清单与索引残留，`core/packages.json` 未登记 piksel）
+**状态**：GitHub #34 已于 2026-11-27 关闭 —— Piksel 1.1.36 把 `dytes.json` 改回
+`type: app` 并在 release.yml 强制 `app`，实测 1.1.32 可升级到 1.1.36。**通用问题
+（安装 / 更新 `type: core` 的应用）仍未修复**，代码仍硬编码 `app/<name>/dytes.json`，
+建议另开 issue 跟踪。
 
 ### 1. 现象
 
@@ -1240,3 +1242,128 @@ fn is_retryable_error(e: &anyhow::Error) -> bool {
 ### 5. 备注
 
 GitHub issue：<https://github.com/dytescn/dytes/issues/36>。已修复并随 0.2.27 发布。
+
+---
+
+## I-22 GitHub #37：旧版 Windows 启动即报 `SystemParametersInfoForDpi` 入口点缺失
+
+**发现日期**：2026-11-28（GitHub #37）
+**影响版本**：0.2.28（Windows GUI 发布产物）
+**严重程度**：P1 —— 受影响的系统上任何命令（含 `dytes --version`）都无法启动
+**状态**：已定位（2026-11-28 评论补充环境与导入表分析）；修复方向定为方案 A
+（声明最低 Windows 10，由下载页 / 安装脚本提示）；**程序自身无法在旧系统上提示**，
+因为失败发生在加载器阶段；**无 GUI 构建也无法回到 Win7**，需要旧工具链
+（rustc ≤ 1.77）全量重建才可能，当前不作为目标
+
+### 1. 现象
+
+双击 / 运行发布产物（`dytes-windows.exe`）时，进程尚未进入 `main`，Windows 加载器
+直接弹出错误框：
+
+```text
+dytes-windows.exe - 无法找到入口
+无法定位程序输入点 SystemParametersInfoForDpi 于动态链接库 user32.dll 上。
+```
+
+issue 评论补充的实测环境（Windows 7 SP1 x64）：
+
+| 项 | 值 |
+| --- | --- |
+| OS | Windows 7 Ultimate SP1 x64（6.1.7601.65536） |
+| 程序 | `dytes-windows.exe`（31,905,280 字节，`F:\soft\`） |
+| 运行库 | VC++ 2015–2022 x64 14.44.35211、UCRT 10.0.14393、.NET 4.8 均已安装 |
+| 启动方式 | 双击 / 命令行直接运行 |
+| 退出码 | `0xC0000139`（`STATUS_ENTRYPOINT_NOT_FOUND`，cmd 中为 `-1073741511`） |
+
+系统日志（`Application Popup`，事件 ID 26）记录同一条“无法定位程序输入点”；
+进程约 0.5 秒退出，窗口不出现。
+
+### 2. 原因
+
+Windows 7 的 `user32.dll` 没有该导出；发布产物在 `windows-latest`（MSVC）上编译，
+PE 导入表带上这些符号后，加载器在启动阶段就失败（`0xC0000139`），与 dytes 自身逻辑
+无关。评论中的导入表分析显示**不止 Slint 一处**：
+
+| DLL | 导入符号 | 最低系统要求 |
+| --- | --- | --- |
+| `user32.dll` | `SystemParametersInfoForDpi` | Windows 10（评论记为 1703） |
+| `bcryptprimitives.dll` | `ProcessPrng` | Windows 10 |
+| `combase.dll` | `CoTaskMemFree`、`CoCreateFreeThreadedMarshaler` | Windows 8（Win7 无 `combase.dll`） |
+| `api-ms-win-core-winrt-error-l1-1-0.dll` | `RoOriginateErrorW` | Windows 8 |
+| `kernel32.dll` | `GetSystemTimePreciseAsFileTime` | Windows 8 |
+| `api-ms-win-core-synch-l1-2-0.dll` | `WaitOnAddress`、`WakeByAddressSingle` | Windows 8（Win7 仅装 UCRT 后有 downlevel 版本） |
+
+来源分两层：
+
+1. **Slint**：`i-slint-backend-winit-1.18.1/lib.rs:865` 直接
+   `use windows::Win32::UI::HiDpi::SystemParametersInfoForDpi;` 并调用，没有回退；
+   对照 winit 自己的 `GetDpiForWindow` 是 `get_function!("user32.dll", ...)`
+   动态解析（`winit-0.30.13/src/platform_impl/windows/util.rs:257`），旧系统可降级；
+2. **Rust 标准库与依赖链**：`ProcessPrng`、`WaitOnAddress`、`combase`、WinRT 错误
+   API 等来自 std / `windows` crate 等底层依赖。Rust 1.78 起官方最低支持 Windows 10，
+   这些调用在 std 内部，**与是否启用 `gui` feature 无关**。
+
+因此：
+
+- 装 VC++ 运行库 / UCRT / .NET 都无法补上这些系统级 API（评论已实测 Win7 的
+  `bcryptprimitives.dll` 没有 `ProcessPrng` 导出）；
+- 即使产出不带 `gui` 的 `dytes-action.bin` 同类产物，只要仍用当前工具链编译，
+  Win7 依然起不来；回到 Win7 需要 rustc ≤ 1.77 全量重建并规避 WinRT / Win10 API；
+- `Cargo.toml` 的 `gui` feature 会让问题更早暴露（`SystemParametersInfoForDpi`），
+  但不是唯一原因。
+
+### 3. 影响
+
+- Windows 7 / 8 / 8.1、Windows Server 2008 R2 / 2012 (R2)、Windows 10 RTM / 1511
+  等系统的用户无法使用 dytes（含 `install` / `update` / `self-update`）；
+- 错误发生在加载器阶段，没有 dytes 自己的错误提示，用户容易误判为文件损坏、
+  下载不完整或“缺运行库”，从而反复安装 VC++ / .NET 运行库（实测无效）；
+- 与「换一台电脑就不能运行」的反馈直接相关，属于产物层面的系统依赖问题
+  （详见 [packaging.md](packaging.md) 的运行时依赖审计）。
+
+### 4. 已确认信息
+
+- 系统：Windows 7 Ultimate SP1 x64（6.1.7601.65536）；
+- 产物：`dytes-windows.exe`（0.2.28 构建，`TimeDateStamp 2026-11-27 07:32 UTC`，
+  `Subsystem = WINDOWS_CUI`，无版本资源）；
+- 运行库齐全（VC++ 14.44 / UCRT 14393 / .NET 4.8），排除“缺运行库”这一常见误判；
+- 双击与命令行启动均失败，事件日志与退出码一致。
+
+若后续还有用户反馈，仍需补充：系统架构（ARM64 / x86）、dytes 版本与产物来源
+（GitHub Release / `packages.funxdata.com` / 随 Piksel 分发）、是否安装了安全软件拦截。
+
+### 5. 修复方向
+
+| 方案 | 内容 | 成本 | 取舍 |
+| --- | --- | --- | --- |
+| A. 明确并声明基线 | 官网 / README / 下载页 / 安装脚本标注最低 Windows 10，并在下载页与脚本入口检测系统版本 | 低 | 不扩大兼容范围；程序自身仍会以 `0xC0000139` 退出，但用户在下下载 / 安装前就能看到要求 |
+| B. 旧工具链重建 | 用 rustc ≤ 1.77 重新构建（并规避 WinRT / Win10 API），可同时产出无 GUI 版本 | 高 | 需锁定旧工具链、验证所有依赖的 MSRV，失去新版本修复；旧系统可用 CLI |
+| C. patch Slint | fork winit 后端，用 `GetProcAddress` 探测 `SystemParametersInfoForDpi` | 高 | **不足以解决**：std / 其它依赖的 `ProcessPrng` 等仍要求 Win10 |
+| D. 仅降级 Slint | 回退到不含该调用的版本 | 低—中 | 同样不足，且可能回退窗口 / 渲染修复 |
+
+**决策（2026-11-28）**：按 A 处理——README / 下载页 / 安装脚本声明最低 Windows 10
+并在脚本入口检测版本；**不承诺程序自身弹提示**（加载器阶段失败，Rust 代码不会执行），
+也不做 B（旧工具链）、C（patch Slint）。评论进一步表明“无 GUI 产物即可兼容 Win7”
+的假设不成立，方案 B 的取舍已据此修正。
+详见 [requirements/windows-installer.md](requirements/windows-installer.md) D2。
+
+### 6. 验证方法
+
+```powershell
+# 产物导入表（任意 Windows 机器）
+dumpbin /imports dytes-windows.exe | findstr /i "SystemParametersInfoForDpi ProcessPrng WaitOnAddress"
+# 旧系统回归：Windows 7 SP1 / Windows 8.1 虚拟机执行 install 脚本，
+# 期望脚本给出“需要 Windows 10”的提示并退出，而不是让用户下载后双击失败
+```
+
+CI 可增加 `dumpbin /imports` 白名单检查，阻止其它 Win10-only API 再次混入。
+
+注意：**旧系统上的提示只能放在下载页 / 安装脚本**（例如 `install.ps1` 用
+`[Environment]::OSVersion` 判断），不能放在 dytes 自己的二进制里——PE 加载器在
+`main` 之前就会因导入表缺失而失败。
+
+### 7. 备注
+
+GitHub issue：<https://github.com/dytescn/dytes/issues/37>。
+2026-11-28 评论（funxsayhi）补充了 Windows 7 SP1 x64 的环境、PE 导入表与退出码，
+并指出“安装任何运行库都无法解决”；该结论已被采纳，I-22 的原因与方案表据此更新。

@@ -19,14 +19,14 @@ use std::path::{Path, PathBuf};
 
 const S3_DYTES_PREFIX: &str = "core/dytes";
 
-async fn fetch_s3_manifest() -> Result<DytesConfig> {
+pub(crate) async fn fetch_s3_manifest() -> Result<DytesConfig> {
     let key = format!("{S3_DYTES_PREFIX}/dytes.json");
     let text = loader::fetch_text(&key).await?;
     serde_json::from_str(&text).with_context(|| format!("解析 S3 清单失败: {key}"))
 }
 
 /// 读取指定版本的清单；发布流程会同时上传 `core/dytes/<version>/dytes.json`。
-async fn fetch_s3_versioned_manifest(version: &str) -> Option<DytesConfig> {
+pub(crate) async fn fetch_s3_versioned_manifest(version: &str) -> Option<DytesConfig> {
     let key = format!("{S3_DYTES_PREFIX}/{version}/dytes.json");
     let text = loader::fetch_text(&key).await.ok()?;
     serde_json::from_str(&text).ok()
@@ -40,7 +40,7 @@ fn s3_checksum_key(version: &str, platform: &str, binary: &str) -> String {
     format!("{}.sha256", s3_binary_key(version, platform, binary))
 }
 
-async fn download_s3_binary(
+pub(crate) async fn download_s3_binary(
     version: &str,
     platform: &str,
     binary: &str,
@@ -71,7 +71,7 @@ async fn download_s3_binary(
     Ok(key)
 }
 
-async fn verify_s3_checksum(
+pub(crate) async fn verify_s3_checksum(
     version: &str,
     platform: &str,
     binary: &str,
@@ -132,7 +132,7 @@ fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-fn binary_name(config: &DytesConfig, platform: &str) -> Result<String> {
+pub(crate) fn binary_name(config: &DytesConfig, platform: &str) -> Result<String> {
     let Some((exports, _)) = platform::select_exports(config, platform) else {
         bail!("dytes 未发布平台 {platform}");
     };

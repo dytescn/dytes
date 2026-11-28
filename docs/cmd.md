@@ -14,6 +14,7 @@ dytes check        校验包清单
 dytes test         本地包自检并离线演练安装
 dytes init         初始化 dytes.json
 dytes config       S3 凭证与工具配置
+dytes setup        安装 dytes 自身（Windows：装到用户目录并写入 PATH）
 dytes help         帮助
 dytes --version    版本
 ```

@@ -70,7 +70,7 @@ Windows 是“换电脑不能运行”反馈最集中的平台，且两种原因
 
 | 依赖 | 来源 | 说明 |
 | --- | --- | --- |
-| universal2（arm64 + x86_64） | — | 在 `macos-14`（Apple Silicon）原生构建 arm64，再交叉构建 x86_64，`lipo` 合并；Intel Mac 与 Apple Silicon 均可运行 |
+| universal2（arm64 + x86_64） | — | 在 `macos-latest`（Apple Silicon）原生构建 arm64，再交叉构建 x86_64，`lipo` 合并；Intel Mac 与 Apple Silicon 均可运行。`macos-14` 已于 2026-11 退役，不要固定该标签 |
 | macOS 11+ | 系统 | 两个架构统一 `MACOSX_DEPLOYMENT_TARGET=11.0`，CI 用 `otool -l` 的 `LC_BUILD_VERSION.minos` 校验 |
 | 有效签名 / 公证 | — | 当前未签名、未公证，首次打开会被 Gatekeeper 拦截（“无法验证开发者”） |
 | 动态库 | 不需要 | 仅链接系统框架 |
@@ -117,7 +117,7 @@ Windows 是“换电脑不能运行”反馈最集中的平台，且两种原因
 
 ### P0：macOS 架构与签名——架构部分已实施
 
-- 发布流程在 `macos-14` 上原生构建 arm64、交叉构建 `x86_64-apple-darwin`，
+- 发布流程在 `macos-latest` 上原生构建 arm64、交叉构建 `x86_64-apple-darwin`，
   再用 `lipo -create` 合并为 universal2；`dytes.json` / 下载路径不变，
   仍是单个 `macos/dytes.app`；
 - 新增 `Verify macOS universal binary` 门禁：`lipo -archs` 必须同时包含
@@ -148,8 +148,10 @@ otool -L dytes-macos.bin && otool -l dytes-macos.bin | grep -A3 LC_BUILD_VERSION
 
 ### P2：固定 runner 版本
 
-把 `windows-latest` / `macos-latest` 改为明确的 `windows-2022` / `macos-14`
+把 `windows-latest` / `macos-latest` 改为明确的 `windows-2022` 等受支持标签
 （或团队同意的版本），升级时作为一次显式改动验证，避免今天能跑、明天基线变高。
+**注意标签有生命周期**：`macos-14` 已于 2026-11 退役（`configuration not supported`），
+固定前先确认 runner-images 仍提供该标签。
 
 ## 5. 本地验证
 

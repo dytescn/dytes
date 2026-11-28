@@ -183,9 +183,11 @@ jobs:
             binary: dytes
             artifact: dytes-linux.bin
             package: dytes.bin
-          # 固定 macos-14（Apple Silicon）：先原生构建 arm64，再交叉构建 x86_64，
+          # macos-latest 当前是 Apple Silicon：先原生构建 arm64，再交叉构建 x86_64，
           # 最后 lipo 合并为 universal2，覆盖 Intel Mac 无法运行的问题。
-          - os: macos-14
+          # 注意：macos-14 已于 2026-11 退役（configuration not supported），
+          # 固定标签前先确认 runner-images 仍受支持。
+          - os: macos-latest
             platform: macos
             binary: dytes
             artifact: dytes-macos.bin

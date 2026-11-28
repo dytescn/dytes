@@ -49,7 +49,7 @@ impl ToolConfig {
         if let Ok(path) = std::env::var("DYTES_CONFIG") {
             return PathBuf::from(path);
         }
-        dirs::config_dir()
+        crate::utils::platform_dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("dytes")
             .join("config.toml")

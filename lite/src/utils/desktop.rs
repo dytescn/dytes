@@ -19,7 +19,8 @@ pub fn desktop_dir() -> Result<PathBuf> {
         }
     }
 
-    dirs::desktop_dir().ok_or_else(|| anyhow::anyhow!("无法获取桌面目录"))
+    crate::utils::platform_dirs::desktop_dir()
+        .ok_or_else(|| anyhow::anyhow!("无法获取桌面目录"))
 }
 
 /// 在系统桌面为应用创建快捷方式，返回快捷方式路径。

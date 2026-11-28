@@ -6,7 +6,7 @@
 pub fn get_default_install_path() -> String {
     #[cfg(windows)]
     {
-        if let Some(local) = dirs::data_local_dir() {
+        if let Some(local) = crate::utils::platform_dirs::data_local_dir() {
             return local
                 .join("Programs")
                 .join("Piksel")
@@ -17,7 +17,7 @@ pub fn get_default_install_path() -> String {
 
     #[cfg(target_os = "macos")]
     {
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = crate::utils::platform_dirs::home_dir() {
             return home
                 .join("Applications")
                 .join("Piksel")
@@ -28,12 +28,12 @@ pub fn get_default_install_path() -> String {
 
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        if let Some(data) = dirs::data_local_dir() {
+        if let Some(data) = crate::utils::platform_dirs::data_local_dir() {
             return data.join("Piksel").to_string_lossy().to_string();
         }
     }
 
-    dirs::home_dir()
+    crate::utils::platform_dirs::home_dir()
         .map(|home| home.join("piksel").to_string_lossy().to_string())
         .unwrap_or_else(|| "piksel".to_string())
 }

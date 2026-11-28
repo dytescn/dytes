@@ -9,6 +9,7 @@ pub mod error;
 pub mod ffi;
 pub mod package;
 pub mod platform;
+pub mod platform_dirs;
 pub mod plugin_manifest;
 pub mod plugin_lib;
 pub mod s3;

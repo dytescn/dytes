@@ -498,13 +498,13 @@ mod windows {
     }
 
     fn default_install_dir() -> PathBuf {
-        dirs::data_local_dir()
+        crate::utils::platform_dirs::data_local_dir()
             .map(|dir| dir.join("Programs").join("dytes"))
             .unwrap_or_else(|| PathBuf::from("dytes"))
     }
 
     fn log_path() -> PathBuf {
-        dirs::data_local_dir()
+        crate::utils::platform_dirs::data_local_dir()
             .map(|dir| dir.join("dytes").join("logs").join("install.log"))
             .unwrap_or_else(|| PathBuf::from("dytes-install.log"))
     }

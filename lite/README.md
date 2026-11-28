@@ -17,20 +17,32 @@
 ## 当前状态（2026-11-28）
 
 - `cargo build --release` 在 `windows-latest` + `1.99.0-win7.1` 上成功；
-- 产物约 **18.7 MB**（完整版约 32 MB）；
+- 产物 **8,841,216 字节（约 8.4 MB）**（完整版约 32 MB）；
 - `dumpbin /imports`：`ProcessPrng` / `WaitOnAddress` / `WakeByAddressSingle` /
   `GetSystemTimePreciseAsFileTime` / `RoOriginateErrorW` /
-  `SystemParametersInfoForDpi` **全部消失**（rust-win7 工具链生效）；
-- **仍导入 `combase.dll!CoTaskMemFree`**：来自 `aws-sdk-s3` →
-  `aws-smithy-http-client` → `hyper-util` → `windows-registry` → `windows-strings`
-  的 Windows 代理支持，Win7 上没有 `combase.dll`，因此**尚不能运行**。
+  `SystemParametersInfoForDpi` **全部消失**；
+- `combase.dll` **已消失**（latest run：`combase=False`）。
+
+达成方式：
+
+| 问题 | 处理 |
+| --- | --- |
+| Rust std 的 Win10 API | `Fenex/setup-rust-win7` 自定义工具链（1.99.0-win7.1） |
+| Slint 的 `SystemParametersInfoForDpi` | 删除 GUI 与 slint/rfd/slint-build |
+| `windows` crate 的 combase/WinRT | 改为 `windows-sys 0.52` |
+| `dirs-sys` 的 `CoTaskMemFree` | 用 `utils/platform_dirs.rs`（环境变量）替换 `dirs` |
+| `windows-core` 的 combase 导出 | `lite/vendor/windows-core` 补丁：`CoTaskMemAlloc` / `CoTaskMemFree` / `CoCreateFreeThreadedMarshaler` → `ole32.dll` |
+| AWS SDK 的 hyper-util/windows-registry | 移除 `aws-sdk-s3`，改用 `utils/s3.rs` 轻量只读客户端（SigV4） |
+
+## 命令范围
+
+Lite 只保留：`install` / `update` / `self-update` / `config` / `setup` / `init` / `help`。
+不支持 `publish` / `check` / `test`（在线部分）与 `--gui`。
 
 ## 下一步
 
-1. 移除 `aws-sdk-s3` / `aws-config`（及 aws-smithy-*、hyper-util），用
-   `reqwest 0.12` + 自实现 SigV4 只读客户端（`GET` / `HEAD`）替代；
-   这是去掉 combase 与大幅缩小依赖的关键；
-2. Windows 7 SP1 实机验证 `--version` / `setup --offline` / `install`；
+1. **Windows 7 SP1 实机验证**：`--version` / `setup --offline` / `install` / `update --check`；
+2. 若实机仍缺符号，用 `dumpbin /imports` 对照 Win7 导出表继续收敛；
 3. 决定 Lite 的发布路径（GitHub Release + S3 版本化目录，不进 `latest` 清单）。
 
 ## 构建

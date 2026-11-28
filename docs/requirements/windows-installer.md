@@ -43,7 +43,9 @@
 - 不支持 Windows 10 以下的系统——见 I-22；已确认不做 legacy 产物、也不 patch Slint
   （Rust std 与底层依赖同样依赖 Win10-only API，去掉 GUI 也无法解决）；
   安装器本身也受同一限制，旧系统提示只能放在下载页 / 安装脚本；
-- 不覆盖 Linux / macOS 的安装器（后续可复用同一套 CLI 设计）。
+- 不覆盖 Linux / macOS 的安装器（后续可复用同一套 CLI 设计）；
+- 不把 Windows Lite（无 GUI 构建）当作 Win7 兼容版：Lite 只是去掉 Slint / 图形依赖，
+  最低系统仍是 Windows 10（Rust std 的基线，见 [../issues.md](../issues.md) I-22）。
 
 ## 3. 用户场景
 

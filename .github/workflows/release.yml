@@ -528,6 +528,112 @@ jobs:
           path: artifact/
           if-no-files-found: error
 
+  build-windows-lite:
+    name: Build Windows Lite (no GUI)
+    needs: preflight
+    runs-on: windows-latest
+    environment: product
+    # 面向低端电脑的无 GUI 产物：不链接 Slint / Rfd / OpenGL，体积更小。
+    # 仍要求 Windows 10+（Rust std 的 Windows 基线，见 issues.md I-22），
+    # 因此不要把它当作 Win7 兼容版。
+    env:
+      UPYUN_API_KEY: ${{ secrets.UPYUN_API_KEY }}
+      UPYUN_API_SECRET: ${{ secrets.UPYUN_API_SECRET }}
+      UPYUN_BUCKET: ${{ secrets.UPYUN_BUCKET }}
+      UPYUN_ENDPOINT: ${{ secrets.UPYUN_ENDPOINT || 'https://s3.api.upyun.com' }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.UPYUN_API_KEY }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.UPYUN_API_SECRET }}
+      AWS_DEFAULT_REGION: us-east-1
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify S3 credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for var in UPYUN_API_KEY UPYUN_API_SECRET; do
+            if [ -z "${!var:-}" ]; then
+              echo "::error::$var 未配置：Lite 产物将缺少内置 S3 凭据"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # 无 gui feature：不编译 Slint / Rfd，也不需要图形构建依赖。
+      - name: Build dytes Lite (no GUI)
+        run: cargo build --release --locked
+
+      - name: Prepare Lite artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p upload artifact
+          cp target/release/dytes.exe upload/dytes-lite.exe
+          cp target/release/dytes.exe artifact/dytes-windows-lite.exe
+          ls -l upload artifact
+
+      - name: Verify builtin S3 credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="artifact/dytes-windows-lite.exe"
+          for var in UPYUN_API_KEY UPYUN_API_SECRET; do
+            value="${!var:-}"
+            if [ -z "$value" ]; then
+              echo "::error::$var 为空，无法校验内置凭据"
+              exit 1
+            fi
+            if ! grep -aFq -- "$value" "$binary"; then
+              echo "::error::$var 未写入 $binary：build.rs 未拿到该变量（检查 env 作用域或清理构建缓存）"
+              exit 1
+            fi
+          done
+          echo "dytes-windows-lite.exe 已内置 S3 凭据"
+
+      - name: Write SHA-256 checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e "
+            const fs = require('fs');
+            const crypto = require('crypto');
+            const file = process.argv[1];
+            const hash = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+            fs.writeFileSync(file + '.sha256', hash + '  ' + require('path').basename(file) + '\n');
+          " "upload/dytes-lite.exe"
+          cat "upload/dytes-lite.exe.sha256"
+
+      - name: Upload Lite build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dytes-windows-lite
+          path: artifact/
+          if-no-files-found: error
+
+      # Lite 只进版本化目录，不更新 latest 清单：self-update 仍指向完整版。
+      - name: Upload Lite binary to UpYun S3
+        shell: bash
+        env:
+          VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          set -euo pipefail
+          aws configure set default.s3.addressing_style path
+          for file in upload/*; do
+            aws s3 cp "$file" \
+              "s3://$UPYUN_BUCKET/core/dytes/$VERSION/windows/$(basename "$file")" \
+              --endpoint-url "$UPYUN_ENDPOINT"
+          done
+
   publish-manifest:
     name: Publish dytes.json
     needs:
@@ -613,6 +719,7 @@ jobs:
       - preflight
       - build
       - build-action
+      - build-windows-lite
       - publish-manifest
     runs-on: ubuntu-latest
     permissions:
@@ -643,6 +750,7 @@ jobs:
       - preflight
       - publish-manifest
       - purge-cache
+      - build-windows-lite
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -688,6 +796,10 @@ jobs:
 
           echo "检查版本化清单..."
           check_status "$base/$version/dytes.json?t=$(date +%s)"
+
+          echo "检查 Windows Lite（仅版本化路径，不更新 latest）..."
+          check_status "$base/$version/windows/dytes-lite.exe?t=$(date +%s)"
+          check_status "$base/$version/windows/dytes-lite.exe.sha256?t=$(date +%s)"
 
           echo "检查 latest 内容与版本化产物一致..."
           for entry in windows:dytes.exe linux:dytes.bin macos:dytes.app; do

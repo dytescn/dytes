@@ -26,6 +26,9 @@ dytes setup [--offline] [--dir <DIR>] [--no-path] [--json]
 
 双击启动时等价于 `dytes setup`（默认在线，失败时可弹窗选择安装当前版本）。
 
+Windows Lite（无 GUI）产物同样支持 `dytes setup` 与双击安装：安装流程与完整版一致，
+但 Lite 不包含 Slint 界面，`install --gui` / `update --gui` 会提示当前构建未启用图形界面。
+
 ## 3. 执行流程
 
 1. 解析安装目录并创建；目标文件为 `<DIR>\dytes.exe`。

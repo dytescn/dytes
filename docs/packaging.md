@@ -8,7 +8,7 @@
 ## 1. 当前打包命令
 
 发布入口是 [`.github/workflows/release.yml`](../.github/workflows/release.yml)，由
-`v*` tag 或手动触发，共 4 个构建：
+`v*` tag 或手动触发，共 5 个构建：
 
 | job | runner | 命令 | 产物 |
 | --- | --- | --- | --- |
@@ -16,6 +16,7 @@
 | `build`（Linux） | `ubuntu-22.04` | 同上 | `dytes-linux.bin`（上传为 `dytes.bin`） |
 | `build`（macOS） | `macos-latest` | 同上 | `dytes-macos.bin`（上传为 `dytes.app`） |
 | `build-action`（Linux） | `ubuntu-22.04` | `cargo build --release --locked`（**无 GUI**） | `dytes-action.bin` |
+| `build-windows-lite`（Windows） | `windows-latest` | `cargo build --release --locked`（**无 GUI**） | `dytes-windows-lite.exe` |
 
 三个 GUI 构建在编译前安装 Unix 依赖（Linux 为 `cmake ninja-build pkg-config`、
 `libxkbcommon-dev`、X11 / Wayland、EGL / GL、`libfontconfig1-dev`、
@@ -34,6 +35,11 @@
 产物分发：`core/dytes/<version>/<platform>/`（版本化）、
 `core/dytes/latest/<platform>/`（别名）、`core/dytes/dytes.json`（清单）、
 `latest/version.js`（官网），随后刷新 CDN（见 `purge-cache.yml`）。
+
+Windows Lite 只上传到 `core/dytes/<version>/windows/dytes-lite.exe`（+ `.sha256`）
+并进入 GitHub Release，**不进入 `latest` 与清单**：`self-update` 始终指向完整版，
+Lite 用户升级后会得到完整版。Lite 去掉了 Slint / Rfd / OpenGL 依赖，适合低端电脑，
+但最低系统仍是 Windows 10（见 [issues.md](issues.md) I-22）。
 
 ## 2. 各平台运行时依赖
 

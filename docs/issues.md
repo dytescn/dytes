@@ -1,7 +1,7 @@
 # dytes 已知问题
 
 > 记录实际使用中遇到的阻塞问题、复现方式与修复方向。
-> 最近更新：2026-11-28（同步 GitHub #37 并记录 I-22；核对线上状态：#37 open，#33–#36 均 closed。I-22 由 #37 评论确认为 Windows 7 SP1 x64（退出码 0xC0000139），导入表显示 Slint 的 `SystemParametersInfoForDpi` 之外还有 Rust std / 依赖的 `ProcessPrng`、`WaitOnAddress` 等 Win10 API，装运行库无效、无 GUI 构建也无法回到 Win7；修复方向定为“声明最低 Windows 10，并由下载页 / 安装脚本提前提示”（程序自身在加载器阶段崩溃，无法自检）。打包与系统依赖现状见 [packaging.md](packaging.md)）
+> 最近更新：2026-11-28（#37 增补 0.2.29 实测：静态 CRT 后 Win7 仍以 `0xC0000139` 退出，导入表还含 Rust std 的 `ProcessPrng` / `WaitOnAddress` / `GetSystemTimePreciseAsFileTime`，只有 rustc ≤ 1.77 才能去掉；对应计划为“声明 Win10+ + 新增无 GUI 的 Windows Lite 产物 + 下载页 / 脚本提示”，Win7 运行需单独立项降级工具链）。打包与系统依赖现状见 [packaging.md](packaging.md)）
 
 ---
 
@@ -1248,12 +1248,12 @@ GitHub issue：<https://github.com/dytescn/dytes/issues/36>。已修复并随 0.
 ## I-22 GitHub #37：旧版 Windows 启动即报 `SystemParametersInfoForDpi` 入口点缺失
 
 **发现日期**：2026-11-28（GitHub #37）
-**影响版本**：0.2.28（Windows GUI 发布产物）
+**影响版本**：0.2.28 / 0.2.29（Windows GUI 发布产物）
 **严重程度**：P1 —— 受影响的系统上任何命令（含 `dytes --version`）都无法启动
-**状态**：已定位（2026-11-28 评论补充环境与导入表分析）；修复方向定为方案 A
-（声明最低 Windows 10，由下载页 / 安装脚本提示）；**程序自身无法在旧系统上提示**，
-因为失败发生在加载器阶段；**无 GUI 构建也无法回到 Win7**，需要旧工具链
-（rustc ≤ 1.77）全量重建才可能，当前不作为目标
+**状态**：已定位；0.2.29 静态 CRT 后 Win7 仍失败（见 4.1）。当前处置：声明最低
+Windows 10、下载页 / 安装脚本提示，并新增**无 GUI 的 Windows Lite 产物**（面向低端
+电脑，仍是 Windows 10+）。**Win7 运行**需要 rustc ≤ 1.77 全量重建，依赖 MSRV 冲突
+较大，单独立项评估，当前不作为目标
 
 ### 1. 现象
 
@@ -1332,6 +1332,36 @@ PE 导入表带上这些符号后，加载器在启动阶段就失败（`0xC0000
 若后续还有用户反馈，仍需补充：系统架构（ARM64 / x86）、dytes 版本与产物来源
 （GitHub Release / `packages.funxdata.com` / 随 Piksel 分发）、是否安装了安全软件拦截。
 
+### 4.1 0.2.29 实测：静态 CRT 后仍失败
+
+0.2.29 下载线上 `core/dytes/0.2.29/windows/dytes.exe` 解析 PE 导入表，Win7 缺失符号
+一个都没少（静态 CRT 只去掉了 `VCRUNTIME140.dll` / `api-ms-win-crt-*`）：
+
+| 符号 | 来源 | 说明 |
+| --- | --- | --- |
+| `user32!SystemParametersInfoForDpi` | `i-slint-backend-winit-1.18.1/lib.rs:865` 直接调用 | 只有 GUI 构建会引入 |
+| `combase.dll`（`CoTaskMemFree`、`CoCreateFreeThreadedMarshaler`） | `windows-core 0.62.2` 的 `link!("combase.dll")` | Win7 无 `combase.dll` |
+| `api-ms-win-core-winrt-error-l1-1-0!RoOriginateErrorW` | `windows-core` 错误处理 | Win8+ |
+| `bcryptprimitives!ProcessPrng` | **Rust std** | Win10 |
+| `api-ms-win-core-synch-l1-2-0!WaitOnAddress` / `WakeByAddressSingle` | **Rust std** | Win8+ |
+| `kernel32!GetSystemTimePreciseAsFileTime` | **Rust std** | Win8+ |
+
+**结论：Win7 不可用的根因是 Rust 1.78 起的 Windows 基线（std 直接导入 Win10 API），
+不是 dytes 代码，也不是缺运行库。** 只去掉 GUI 或 patch Slint 都不够。
+
+降级验证（2026-11-28）：
+
+- 当前依赖 MSRV：`slint 1.18` → 1.92、`aws-sdk-s3 1.156` → 1.94.1、`windows 0.62` → 1.82；
+- 项目自 2026-10 建立以来所有版本都用当前工具链构建，没有旧工具链产物可回退；
+- 安装 rustc 1.77 实测连 `Cargo.lock`（version = 4）都无法解析，需整套依赖与 lock 重做。
+
+因此分两步处理：
+
+1. **Windows Lite（无 GUI）**：去掉 Slint / GUI 依赖与 `SystemParametersInfoForDpi`，
+   体积更小、无图形依赖，适合低端电脑；**最低系统仍是 Windows 10**；
+2. **Win7 运行**：需要 rustc ≤ 1.77 + 依赖降级（AWS SDK / windows / reqwest / tokio），
+   单独评估，不阻塞 Lite。
+
 ### 5. 修复方向
 
 | 方案 | 内容 | 成本 | 取舍 |
@@ -1340,11 +1370,12 @@ PE 导入表带上这些符号后，加载器在启动阶段就失败（`0xC0000
 | B. 旧工具链重建 | 用 rustc ≤ 1.77 重新构建（并规避 WinRT / Win10 API），可同时产出无 GUI 版本 | 高 | 需锁定旧工具链、验证所有依赖的 MSRV，失去新版本修复；旧系统可用 CLI |
 | C. patch Slint | fork winit 后端，用 `GetProcAddress` 探测 `SystemParametersInfoForDpi` | 高 | **不足以解决**：std / 其它依赖的 `ProcessPrng` 等仍要求 Win10 |
 | D. 仅降级 Slint | 回退到不含该调用的版本 | 低—中 | 同样不足，且可能回退窗口 / 渲染修复 |
+| E. Windows Lite（无 GUI） | 发布不带 `gui` feature 的 `dytes-windows-lite.exe`，去掉 Slint 与图形依赖 | 低 | 体积更小、适合低端电脑；**仍是 Windows 10+**，不解决 Win7 |
 
-**决策（2026-11-28）**：按 A 处理——README / 下载页 / 安装脚本声明最低 Windows 10
-并在脚本入口检测版本；**不承诺程序自身弹提示**（加载器阶段失败，Rust 代码不会执行），
-也不做 B（旧工具链）、C（patch Slint）。评论进一步表明“无 GUI 产物即可兼容 Win7”
-的假设不成立，方案 B 的取舍已据此修正。
+**决策（2026-11-28 起）**：先做 A + E —— 声明最低 Windows 10、下载页 / 脚本提示，
+并新增无 GUI 的 Windows Lite 产物；**不做 B / C / D**。Win7 运行如确有需求，
+按 B 单独立项（需降级工具链与整套依赖，见 4.1）。评论进一步表明
+“无 GUI 产物即可兼容 Win7”的假设不成立，方案 B 的取舍已据此修正。
 详见 [requirements/windows-installer.md](requirements/windows-installer.md) D2。
 
 ### 6. 验证方法

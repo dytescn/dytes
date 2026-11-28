@@ -1,0 +1,12 @@
+[package]
+name = "win7-http"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.77"
+
+[dependencies]
+anyhow = "=1.0.86"
+reqwest = { version = "=0.12.5", features = ["json", "stream", "blocking"] }
+tokio = { version = "=1.38.1", features = ["rt-multi-thread", "macros", "fs", "time", "io-util"] }
+
+[workspace]

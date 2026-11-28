@@ -1,0 +1,79 @@
+name: Win7 Lite spike
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "spike/win7-lite"
+    paths:
+      - "spike/**"
+      - ".github/workflows/win7-spike.yml"
+
+jobs:
+  build:
+    name: ${{ matrix.crate }} / rustc ${{ matrix.toolchain }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        crate: ["win7-min", "win7-http"]
+        toolchain: ["1.77.0", "1.76.0"]
+    defaults:
+      run:
+        shell: bash
+        working-directory: spike/${{ matrix.crate }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust ${{ matrix.toolchain }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Inspect PE imports
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Get-ChildItem target/release/*.exe | Select-Object -First 1
+          Write-Host "binary: $($exe.FullName) size=$($exe.Length)"
+
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (-not (Test-Path $vswhere)) { throw "未找到 vswhere.exe" }
+          $vsPath = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          $vcTools = Get-ChildItem (Join-Path $vsPath 'VC\Tools\MSVC') -Directory |
+            Sort-Object Name -Descending | Select-Object -First 1
+          $dumpbin = Join-Path $vcTools.FullName 'bin\Hostx64\x64\dumpbin.exe'
+          if (-not (Test-Path $dumpbin)) { throw "未找到 dumpbin" }
+
+          $deps = (& $dumpbin '/dependents' $exe.FullName | Out-String)
+          Write-Host $deps
+          $imports = (& $dumpbin '/imports' $exe.FullName | Out-String)
+
+          $targets = @(
+            'SystemParametersInfoForDpi',
+            'ProcessPrng',
+            'WaitOnAddress',
+            'WakeByAddressSingle',
+            'GetSystemTimePreciseAsFileTime',
+            'RoOriginateErrorW'
+          )
+          $found = @()
+          foreach ($t in $targets) {
+            if ($imports -match [regex]::Escape($t)) { $found += $t }
+          }
+          $combase = [bool]($imports -match 'combase\.dll')
+
+          Write-Host "win8/10-only symbols: $(if ($found.Count) { $found -join ', ' } else { 'none' })"
+          Write-Host "combase.dll: $combase"
+          if ($found.Count -gt 0 -or $combase) {
+            Write-Host "RESULT: NOT_WIN7"
+            Write-Host "::error::产物仍导入 Win8/10-only 符号"
+            exit 1
+          }
+          Write-Host "RESULT: WIN7_CLEAN"

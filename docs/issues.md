@@ -1,7 +1,7 @@
 # dytes 已知问题
 
 > 记录实际使用中遇到的阻塞问题、复现方式与修复方向。
-> 最近更新：2026-11-28（#37 增补 0.2.29 实测：静态 CRT 后 Win7 仍以 `0xC0000139` 退出，导入表还含 Rust std 的 `ProcessPrng` / `WaitOnAddress` / `GetSystemTimePreciseAsFileTime`，只有 rustc ≤ 1.77 才能去掉；对应计划为“声明 Win10+ + 新增无 GUI 的 Windows Lite 产物 + 下载页 / 脚本提示”，Win7 运行需单独立项降级工具链）。打包与系统依赖现状见 [packaging.md](packaging.md)）
+> 最近更新：2026-11-28（#37 的 Win7 问题已由新的 **Windows Lite**（`lite/` 分叉 + `Fenex/setup-rust-win7` 工具链）推进到“导入表无 Win8/10-only 符号、无 combase”，0.2.31 已发布 `dytes-windows-lite.exe`（约 8.4 MB）；仍需 Windows 7 实机验证，测试用例见 I-22 第 10 节。打包与系统依赖见 [packaging.md](packaging.md)）
 
 ---
 
@@ -1397,3 +1397,93 @@ CI 可增加 `dumpbin /imports` 白名单检查，阻止其它 Win10-only API �
 GitHub issue：<https://github.com/dytescn/dytes/issues/37>。
 2026-11-28 评论（funxsayhi）补充了 Windows 7 SP1 x64 的环境、PE 导入表与退出码，
 并指出“安装任何运行库都无法解决”；该结论已被采纳，I-22 的原因与方案表据此更新。
+
+### 8. 0.2.31 Lite 发布记录（2026-11-28）
+
+发布 run：<https://github.com/dytescn/dytes/actions/runs/46126023664>（success）。
+`Build Windows Lite (no GUI)` 与新增的 `Verify Lite PE imports` 门禁均通过。
+
+| 项 | 结果 |
+| --- | --- |
+| 产物 | `dytes-windows-lite.exe`，**8,842,240 字节**（完整版约 32 MB） |
+| GitHub Release | `v0.2.31` 含该资产 |
+| S3 版本化路径 | `core/dytes/0.2.31/windows/dytes-lite.exe`（+ `.sha256`，均 200） |
+| 导入表 | 无 `ProcessPrng` / `WaitOnAddress` / `WakeByAddressSingle` / `GetSystemTimePreciseAsFileTime` / `RoOriginateErrorW` / `SystemParametersInfoForDpi` / `combase.dll` |
+| 完整版 | 三平台与 `core/dytes/0.2.31/dytes.json` 同步发布，`latest` 全部 200 |
+
+实现方式：
+
+| 问题来源 | 处理 |
+| --- | --- |
+| Rust std 的 Win10 API | `lite/` 使用 `Fenex/setup-rust-win7@v1`（`1.99.0-win7.1`） |
+| Slint 的 `SystemParametersInfoForDpi` | Lite 删除 GUI、Slint、Rfd、`--gui` |
+| `windows` crate 的 combase / WinRT | 改为 `windows-sys 0.52` |
+| `dirs-sys` 的 `CoTaskMemFree` | 新增 `lite/src/utils/platform_dirs.rs`（环境变量），移除 `dirs` |
+| `windows-core` 的 combase 导出 | `lite/vendor/windows-core` 补丁：`CoTaskMemAlloc` / `CoTaskMemFree` / `CoCreateFreeThreadedMarshaler` → `ole32.dll` |
+| AWS SDK 的 hyper-util / windows-registry | 移除 `aws-sdk-s3`，改用 `lite/src/utils/s3.rs` 只读客户端（SigV4、Range GET、分块续传） |
+
+Lite 命令范围：`install` / `update` / `self-update` / `config` / `setup` / `init`。
+**不提供** `publish` / `check` / `test` / `--gui`；`update --discover` 的
+`list_keys` 在 Lite 中返回“不支持列举”，依赖 `packages.json` 索引。
+
+### 9. 已知限制与风险
+
+| 编号 | 风险 | 说明 | 处理建议 |
+| --- | --- | --- | --- |
+| L-01 | Win7 实机未验证 | CI 只检查了已知 6 类符号，无法覆盖全部 Win7 缺失 API | 按第 10 节在 Win7 SP1 实机回归 |
+| L-02 | **`self-update` 会把 Lite 替换成完整版** | `self-update` 读取 `platform-exports` 的 `windows/dytes.exe`（完整版），替换后在 Win7 上会重新 `0xC0000139` | 待修复：Lite 的 self-update 改为下载 `windows/dytes-lite.exe`，或提示“Lite 不支持自更新，请手动下载” |
+| L-03 | `vendor/windows-core` 补丁维护 | 升级 `windows-core` 需重新把 3 个导出指向 `ole32.dll` | 升级依赖时按 `lite/README.md` 重新打补丁 |
+| L-04 | `lite/` 与主版本分叉 | 主版本 `src/` 变更不会自动进入 Lite | 合并前对照 `git log main -- src` 手动同步 |
+| L-05 | 第三方 action 供应链 | `Fenex/setup-rust-win7@v1` 非 GitHub 认证，下载自定义工具链 | 建议 pin 到 release/commit SHA，并评估信任 |
+| L-06 | 功能裁剪 | Lite 无 publish / check / test / GUI | 文档与命令帮助中明确说明 |
+| L-07 | `update --discover` 降级 | Lite 的 `list_keys` 未实现 ListObjectsV2 | 依赖 `packages.json`；索引缺失时提示不支持 |
+
+### 10. 测试用例
+
+前置：Windows 7 SP1 x64；`dytes-windows-lite.exe` 来自 GitHub Release 或
+`core/dytes/0.2.31/windows/dytes-lite.exe`；先核对 `.sha256`
+（`certutil -hashfile dytes-windows-lite.exe SHA256`）。
+
+#### 10.1 Windows 7（Lite）
+
+| 编号 | 操作 | 预期 |
+| --- | --- | --- |
+| W7-01 | `dytes-windows-lite.exe --version` / `--help` | 正常输出版本/帮助，进程不报入口点缺失（`0xC0000139`） |
+| W7-02 | 资源管理器双击 Lite（无参数） | 弹窗式安装：在线检查 → 下载 → 校验 → 写入 `%LOCALAPPDATA%\Programs\dytes` → 提示新开终端；不残留控制台窗口 |
+| W7-03 | `dytes-windows-lite.exe setup --offline --dir D:\dytes --no-path` | 成功安装内置版本到 `D:\dytes\dytes.exe`；不修改 PATH；日志写入 `%LOCALAPPDATA%\dytes\logs\install.log` |
+| W7-04 | 默认 `setup` 连续执行两次 | 第二次不重复追加 PATH；`PATH` 中原有 `%VAR%` 保留；新终端 `dytes --version` 可用 |
+| W7-05 | `install core cyctron` | 从 S3 下载、SHA-256 校验、生成 `cyctron` 命令入口并可用 |
+| W7-06 | `install core piksel`（或本地离线包） | 依赖按计划安装；`--offline` 时正确使用本地清单/产物 |
+| W7-07 | `update --check` | 读取 `core/dytes`/依赖清单并输出 JSON/文本；无 Win10 API 崩溃 |
+| W7-08 | `self-update` | **当前预期**：Lite 被替换为完整版，随后 Win7 启动失败（见 L-02）；修复后预期：升级为新版 Lite 或明确提示不支持 |
+| W7-09 | 断网 / S3 返回 5xx（mock endpoint） | 下载重试并指数退避；4xx 快速失败；不误报“缺少运行库” |
+| W7-10 | 安装目录含空格与中文（如 `D:\我的 工具\dytes`） | 安装、PATH 写入、命令入口均正常 |
+| W7-11 | 已有旧版本时重复安装/覆盖 | 原子替换并保留备份；失败可回滚；配置不丢 |
+| W7-12 | 安装失败（目标被占用/无写权限） | 弹窗/文本给出可读错误与日志路径，退出码非 0 |
+| W7-13 | `install --gui` / `publish` / `test` / `check` | 参数或子命令不存在，返回参数错误（退出码 2），不 panic |
+| W7-14 | 终端无参数执行、`stdout` 重定向执行 | 不进入安装模式；输出帮助/参数错误 |
+| W7-15 | 下载后核对 SHA-256 | 与 `.../dytes-lite.exe.sha256` 一致 |
+
+#### 10.2 Windows 10 / 11（Lite 回归）
+
+| 编号 | 操作 | 预期 |
+| --- | --- | --- |
+| W10L-01 | `--version` / `setup --offline` / 双击安装 | 与 Win7 行为一致，PATH 生效 |
+| W10L-02 | `install` / `update --check` | 正常下载、校验与更新 |
+| W10L-03 | `self-update` | 同 L-02：确认替换目标与预期一致（完整版或 Lite） |
+| W10L-04 | 与完整版并存 | 安装目录/PATH 不冲突；配置共用 `%APPDATA%\dytes\config.toml` |
+
+#### 10.3 完整版回归（Windows 10 / 11）
+
+| 编号 | 操作 | 预期 |
+| --- | --- | --- |
+| FULL-01 | `dytes --version` / `dytes install --gui` | GUI 安装器正常打开，按钮可点 |
+| FULL-02 | `dytes update` / `self-update` | 正常更新；PATH/安装目录不变 |
+| FULL-03 | `dytes publish --dry-run`（开发者） | 清单与导出校验正常 |
+
+#### 10.4 CI 门禁
+
+| 编号 | 操作 | 预期 |
+| --- | --- | --- |
+| CI-01 | Release workflow 的 `Build Windows Lite` | 构建成功，`Verify Lite PE imports` 通过 |
+| CI-02 | `main` push 触发 `Windows Lite build` | 构建成功，导入表报告 `win8_10_only=[none]`、`combase=False` |

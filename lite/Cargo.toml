@@ -18,6 +18,11 @@ default = []
 
 [workspace]
 
+# Win7：combase.dll 不存在。windows-core 的 CoTaskMemAlloc / CoTaskMemFree /
+# CoCreateFreeThreadedMarshaler 在 ole32.dll 中同样可用，这里用本地补丁指向 ole32。
+[patch.crates-io]
+windows-core = { path = "vendor/windows-core" }
+
 [dependencies]
 anyhow = "1.0.102"
 chrono = "0.4.45"

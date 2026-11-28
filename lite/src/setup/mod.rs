@@ -162,24 +162,28 @@ mod windows {
     use std::path::{Path, PathBuf};
 
     use anyhow::{bail, Context, Result};
-    use windows::core::HSTRING;
-    use windows::Win32::Foundation::{CloseHandle, LPARAM, WPARAM};
-    use windows::Win32::System::Console::{
-        FreeConsole, GetConsoleMode, GetStdHandle, CONSOLE_MODE, STD_OUTPUT_HANDLE,
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Console::{
+        FreeConsole, GetConsoleMode, GetStdHandle, STD_OUTPUT_HANDLE,
     };
-    use windows::Win32::System::Diagnostics::ToolHelp::{
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
         TH32CS_SNAPPROCESS,
     };
-    use windows::Win32::System::Registry::{
+    use windows_sys::Win32::System::Registry::{
         RegCloseKey, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER,
         KEY_READ, KEY_WRITE, REG_EXPAND_SZ, REG_VALUE_TYPE,
     };
-    use windows::Win32::System::Threading::GetCurrentProcessId;
-    use windows::Win32::UI::WindowsAndMessaging::{
+    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
         MessageBoxW, SendMessageTimeoutW, HWND_BROADCAST, IDYES, MB_ICONERROR, MB_ICONINFORMATION,
         MB_ICONQUESTION, MB_OK, MB_YESNO, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
     };
+
+    /// UTF-16 + NUL，供 Win32 `*W` API 使用。
+    fn wide(value: &str) -> Vec<u16> {
+        value.encode_utf16().chain(std::iter::once(0)).collect()
+    }
 
     use super::{append_path, SetupOptions, SetupOutcome};
 
@@ -283,17 +287,19 @@ mod windows {
     /// 标准输出是否为控制台（非重定向）；重定向时不触发双击安装。
     fn stdout_is_console() -> bool {
         unsafe {
-            let Ok(handle) = GetStdHandle(STD_OUTPUT_HANDLE) else {
+            let handle = GetStdHandle(STD_OUTPUT_HANDLE);
+            if handle == 0 || handle == INVALID_HANDLE_VALUE {
                 return false;
-            };
-            let mut mode = CONSOLE_MODE(0);
-            GetConsoleMode(handle, &mut mode).is_ok()
+            }
+            let mut mode: u32 = 0;
+            GetConsoleMode(handle, &mut mode) != 0
         }
     }
 
     pub(super) fn run_double_click() -> i32 {
         // CUI 子系统的 exe 双击时会分配控制台；立即释放，后续只用 MessageBox。
         let _ = unsafe { FreeConsole() };
+
         let options = SetupOptions {
             interactive: true,
             ..Default::default()
@@ -382,20 +388,20 @@ mod windows {
     }
 
     fn add_to_user_path(dir: &Path) -> Result<bool> {
-        let subkey = HSTRING::from("Environment");
-        let value = HSTRING::from("Path");
-        let mut key = HKEY(std::ptr::null_mut());
+        let subkey = wide("Environment");
+        let value = wide("Path");
+        let mut key: HKEY = 0;
         let status = unsafe {
             RegOpenKeyExW(
                 HKEY_CURRENT_USER,
-                &subkey,
-                None,
+                subkey.as_ptr(),
+                0,
                 KEY_READ | KEY_WRITE,
                 &mut key,
             )
         };
-        if status.0 != 0 {
-            bail!("打开注册表 HKCU\\Environment 失败（错误码 {}）", status.0);
+        if status != 0 {
+            bail!("打开注册表 HKCU\\Environment 失败（错误码 {status}）");
         }
 
         let existing = read_string_value(key, &value);
@@ -406,7 +412,7 @@ mod windows {
             Some(updated) => updated,
             None => {
                 unsafe {
-                    let _ = RegCloseKey(key);
+                    RegCloseKey(key);
                 }
                 return Ok(false);
             }
@@ -417,32 +423,40 @@ mod windows {
         for unit in updated.encode_utf16().chain(std::iter::once(0)) {
             data.extend_from_slice(&unit.to_le_bytes());
         }
-        let status =
-            unsafe { RegSetValueExW(key, &value, None, REG_EXPAND_SZ, Some(data.as_slice())) };
+        let status = unsafe {
+            RegSetValueExW(
+                key,
+                value.as_ptr(),
+                0,
+                REG_EXPAND_SZ,
+                data.as_ptr(),
+                data.len() as u32,
+            )
+        };
         unsafe {
-            let _ = RegCloseKey(key);
+            RegCloseKey(key);
         }
-        if status.0 != 0 {
-            bail!("写入用户 PATH 失败（错误码 {}）", status.0);
+        if status != 0 {
+            bail!("写入用户 PATH 失败（错误码 {status}）");
         }
         broadcast_environment_change();
         Ok(true)
     }
 
-    fn read_string_value(key: HKEY, name: &HSTRING) -> Option<String> {
-        let mut kind = REG_VALUE_TYPE(0);
+    fn read_string_value(key: HKEY, name: &[u16]) -> Option<String> {
+        let mut kind: REG_VALUE_TYPE = 0;
         let mut size = 0u32;
         let status = unsafe {
             RegQueryValueExW(
                 key,
-                name,
-                None,
-                Some(&mut kind as *mut REG_VALUE_TYPE),
-                None,
-                Some(&mut size as *mut u32),
+                name.as_ptr(),
+                std::ptr::null(),
+                &mut kind,
+                std::ptr::null_mut(),
+                &mut size,
             )
         };
-        if status.0 != 0 || size == 0 {
+        if status != 0 || size == 0 {
             return None;
         }
 
@@ -451,14 +465,14 @@ mod windows {
         let status = unsafe {
             RegQueryValueExW(
                 key,
-                name,
-                None,
-                Some(&mut kind as *mut REG_VALUE_TYPE),
-                Some(buffer.as_mut_ptr()),
-                Some(&mut actual as *mut u32),
+                name.as_ptr(),
+                std::ptr::null(),
+                &mut kind,
+                buffer.as_mut_ptr(),
+                &mut actual,
             )
         };
-        if status.0 != 0 {
+        if status != 0 {
             return None;
         }
 
@@ -469,16 +483,16 @@ mod windows {
     }
 
     fn broadcast_environment_change() {
-        let param = HSTRING::from("Environment");
+        let param = wide("Environment");
         unsafe {
             SendMessageTimeoutW(
                 HWND_BROADCAST,
                 WM_SETTINGCHANGE,
-                WPARAM(0),
-                LPARAM(param.as_ptr() as isize),
+                0,
+                param.as_ptr() as isize,
                 SMTO_ABORTIFHUNG,
                 5000,
-                None,
+                std::ptr::null_mut(),
             );
         }
     }
@@ -531,36 +545,40 @@ mod windows {
     }
 
     fn message(text: &str) {
-        let text = HSTRING::from(text);
-        let caption = HSTRING::from("dytes 安装");
+        let text = wide(text);
+        let caption = wide("dytes 安装");
         unsafe {
-            MessageBoxW(None, &text, &caption, MB_OK | MB_ICONINFORMATION);
+            MessageBoxW(0, text.as_ptr(), caption.as_ptr(), MB_OK | MB_ICONINFORMATION);
         }
     }
 
     fn message_error(text: &str) {
-        let text = HSTRING::from(text);
-        let caption = HSTRING::from("dytes 安装失败");
+        let text = wide(text);
+        let caption = wide("dytes 安装失败");
         unsafe {
-            MessageBoxW(None, &text, &caption, MB_OK | MB_ICONERROR);
+            MessageBoxW(0, text.as_ptr(), caption.as_ptr(), MB_OK | MB_ICONERROR);
         }
     }
 
     fn confirm(text: &str) -> bool {
-        let text = HSTRING::from(text);
-        let caption = HSTRING::from("dytes 安装");
-        let result = unsafe { MessageBoxW(None, &text, &caption, MB_YESNO | MB_ICONQUESTION) };
+        let text = wide(text);
+        let caption = wide("dytes 安装");
+        let result =
+            unsafe { MessageBoxW(0, text.as_ptr(), caption.as_ptr(), MB_YESNO | MB_ICONQUESTION) };
         result == IDYES
     }
 
     fn parent_process_name() -> Option<String> {
         unsafe {
-            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).ok()?;
-            let mut entry = PROCESSENTRY32W::default();
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snapshot == 0 || snapshot == INVALID_HANDLE_VALUE {
+                return None;
+            }
+            let mut entry: PROCESSENTRY32W = std::mem::zeroed();
             entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
 
             let mut processes: Vec<(u32, u32, String)> = Vec::new();
-            let mut has_entry = Process32FirstW(snapshot, &mut entry).is_ok();
+            let mut has_entry = Process32FirstW(snapshot, &mut entry) != 0;
             while has_entry {
                 let len = entry
                     .szExeFile
@@ -573,7 +591,7 @@ mod windows {
                     String::from_utf16_lossy(&entry.szExeFile[..len]),
                 ));
                 entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-                has_entry = Process32NextW(snapshot, &mut entry).is_ok();
+                has_entry = Process32NextW(snapshot, &mut entry) != 0;
             }
             let _ = CloseHandle(snapshot);
 

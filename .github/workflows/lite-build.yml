@@ -1,0 +1,73 @@
+name: Windows Lite build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "spike/win7-lite"
+      - "main"
+    paths:
+      - "lite/**"
+      - ".github/workflows/lite-build.yml"
+
+jobs:
+  build:
+    name: Build Lite (rust-win7)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: lite
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 第三方 action：安装 Fenex/rust-win7 自定义工具链（std 打过 Win7 兼容补丁）。
+      - name: Setup rust-win7 toolchain
+        uses: Fenex/setup-rust-win7@v1
+        with:
+          version: "1.99.0-win7.1"
+          arch: x86_64
+          cache: true
+
+      - name: Build Lite (no GUI)
+        run: cargo build --release --locked
+
+      - name: Inspect PE imports
+        shell: pwsh
+        working-directory: lite
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Get-ChildItem target/release/*.exe | Select-Object -First 1
+          Write-Host "binary: $($exe.FullName) size=$($exe.Length)"
+
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (-not (Test-Path $vswhere)) { throw "未找到 vswhere.exe" }
+          $vsPath = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          $vcTools = Get-ChildItem (Join-Path $vsPath 'VC\Tools\MSVC') -Directory |
+            Sort-Object Name -Descending | Select-Object -First 1
+          $dumpbin = Join-Path $vcTools.FullName 'bin\Hostx64\x64\dumpbin.exe'
+          if (-not (Test-Path $dumpbin)) { throw "未找到 dumpbin" }
+
+          $deps = (& $dumpbin '/dependents' $exe.FullName | Out-String)
+          Write-Host $deps
+          $imports = (& $dumpbin '/imports' $exe.FullName | Out-String)
+
+          $targets = @(
+            'SystemParametersInfoForDpi',
+            'ProcessPrng',
+            'WaitOnAddress',
+            'WakeByAddressSingle',
+            'GetSystemTimePreciseAsFileTime',
+            'RoOriginateErrorW'
+          )
+          $found = @()
+          foreach ($t in $targets) {
+            if ($imports -match [regex]::Escape($t)) { $found += $t }
+          }
+          $combase = [bool]($imports -match 'combase\.dll')
+          Write-Host "win8/10-only symbols: $(if ($found.Count) { $found -join ', ' } else { 'none' })"
+          Write-Host "combase.dll: $combase"
+          Write-Host "（仅报告，不阻断：Lite 迁移阶段先确认构建成功）"

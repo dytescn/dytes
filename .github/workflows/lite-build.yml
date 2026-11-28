@@ -74,6 +74,7 @@ jobs:
           }
           $combase = [bool]($imports -match 'combase\.dll')
           $summarySymbols = if ($found.Count) { $found -join ', ' } else { 'none' }
+          Write-Host "::warning::Lite PE imports: size=$($exe.Length); win8_10_only=[$summarySymbols]; combase=$combase"
           Write-Host "win8/10-only symbols: $summarySymbols"
           Write-Host "combase.dll: $combase"
           Write-Host "（仅报告，不阻断：Lite 迁移阶段先确认构建成功）"
